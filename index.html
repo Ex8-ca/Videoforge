@@ -1813,19 +1813,48 @@ function clearHistory() {
 // ============================================================
 // Cloudinary Upload
 // ============================================================
-// Cloudinary credentials (hardcoded)
-const CLOUDINARY_CLOUD_NAME = 'dol2t3l5x';  // Your actual cloud name
-const CLOUDINARY_API_KEY = '817871459259283';
-const CLOUDINARY_API_SECRET = 'kHrGwlpKfJN925Z6-eZiikNEuco';
-const CLOUDINARY_UPLOAD_PRESET = 'videoforge_preset';
+// Cloudinary config is fetched at startup from the server so
+// the real API secret never has to live in the browser. The
+// server's `GET /api/cloudinary-config` returns only the values
+// that are safe to expose for UNSIGNED uploads:
+//   - cloud_name      (public)
+//   - upload_preset   (public)
+let CLOUDINARY_CLOUD_NAME = '';
+let CLOUDINARY_UPLOAD_PRESET = 'videoforge_preset';
 const CLOUDINARY_FOLDER = 'videoforge';
+
+// Fetch the server-provided config before any upload happens.
+// Fire-and-forget — uploads will check `cloudinaryReady` first.
+let cloudinaryReady = false;
+(async () => {
+    try {
+        const resp = await fetch('/api/cloudinary-config');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const cfg = await resp.json();
+        if (cfg.configured && cfg.cloud_name && cfg.upload_preset) {
+            CLOUDINARY_CLOUD_NAME = cfg.cloud_name;
+            CLOUDINARY_UPLOAD_PRESET = cfg.upload_preset;
+            cloudinaryReady = true;
+            console.log('[Cloudinary] config loaded from server');
+        } else {
+            console.warn('[Cloudinary] not configured on server — uploads disabled');
+        }
+    } catch (e) {
+        console.error('[Cloudinary] failed to load config:', e);
+    }
+})();
 
 async function uploadToCloudinary() {
     if (!lastVideoUrl) {
         alert('No video to upload');
         return;
     }
-    
+
+    if (!cloudinaryReady || !CLOUDINARY_CLOUD_NAME) {
+        alert('Cloudinary is not configured on the server. Set CLOUDINARY_CLOUD_NAME and CLOUDINARY_UPLOAD_PRESET in the server .env and restart.');
+        return;
+    }
+
     alert('Downloading video for upload...');
     
     try {

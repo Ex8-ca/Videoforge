@@ -9,12 +9,50 @@ import gzip
 from urllib.parse import urlparse, parse_qs
 
 COMFYUI = "http://127.0.0.1:8188"
+
+# ------------------------------------------------------------
+# Load `.env` from this script's directory (if present) so the
+# app works the same whether started manually or via systemd.
+# Already-set env vars take precedence (so production overrides win).
+# ------------------------------------------------------------
+def _load_env_file():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+    try:
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key = key.strip()
+                if key and key not in os.environ:
+                    os.environ[key] = val.strip().strip('"').strip("'")
+    except OSError:
+        pass
+
+_load_env_file()
+
 # MiniMax API key — loaded from env, with local fallback
-_MINIMAX_KEY = os.environ.get("MINIMAX_API_VIDEOFORGE", "")
+_MINIMAX_KEY = os.environ.get("MINIMAX_API_VIDEOFORGE", "") or os.environ.get("MINIMAX_API_KEY", "")
 if not _MINIMAX_KEY:
-    print("FATAL: MINIMAX_API_VIDEOFORGE is not set. Source your .env before starting.", file=__import__("sys").stderr)
+    print("FATAL: MINIMAX_API_VIDEOFORGE (or MINIMAX_API_KEY) is not set. Source your .env before starting.", file=__import__("sys").stderr)
     __import__("sys").exit(1)
 MINIMAX_VIDEO_API_KEY = _MINIMAX_KEY
+
+# Cloudinary — server-side only. The browser fetches
+# `GET /api/cloudinary-config` to get cloud_name + upload_preset
+# (the only two values safe to expose), and uploads UNSIGNED.
+CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "")
+CLOUDINARY_API_KEY = os.environ.get("CLOUDINARY_API_KEY", "")
+# Server-only: never return this from any HTTP endpoint.
+CLOUDINARY_API_SECRET = os.environ.get("CLOUDINARY_API_SECRET", "")
+CLOUDINARY_UPLOAD_PRESET = os.environ.get("CLOUDINARY_UPLOAD_PRESET", "videoforge_preset")
+# Together.ai — used by the /together/* proxy. The current proxy
+# code uses `_MINIMAX_KEY` for this (see TODO below) — leaving
+# `TOGETHER_API_KEY` here so Marc can decide whether to switch.
+TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY", "")
 MINIMAX_VIDEO_URL = "https://api.minimax.io/v1/video_generation"
 MINIMAX_VIDEO_QUERY_URL = "https://api.minimax.io/v1/query/video_generation"
 MINIMAX_FILES_URL = "https://api.minimax.io/v1/files/retrieve"
@@ -25,7 +63,9 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=FRONTEND_DIR, **kwargs)
 
     def do_GET(self):
-        if self.path.startswith("/api/"):
+        if self.path == "/api/cloudinary-config":
+            self.handle_cloudinary_config()
+        elif self.path.startswith("/api/"):
             self.proxy("GET")
         elif self.path.startswith("/together/"):
             self.proxy_together("GET")
@@ -145,6 +185,23 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
+    def handle_cloudinary_config(self):
+        """GET /api/cloudinary-config — public Cloudinary config for the browser.
+
+        Returns ONLY the values safe to expose to an unsigned browser upload:
+        the cloud name and the upload preset. The API key and API secret
+        are NEVER returned — they remain server-side only.
+        """
+        configured = bool(CLOUDINARY_CLOUD_NAME and CLOUDINARY_UPLOAD_PRESET)
+        self._send_json(200, {
+            "configured": configured,
+            "cloud_name": CLOUDINARY_CLOUD_NAME,
+            "upload_preset": CLOUDINARY_UPLOAD_PRESET,
+            # Deliberately NOT included:
+            #   - CLOUDINARY_API_KEY      (server-side only)
+            #   - CLOUDINARY_API_SECRET   (server-side only — never expose)
+        })
+
     def proxy(self, method):
         comfyui_path = self.path[4:]  # strip "/api"
         url = COMFYUI + comfyui_path
@@ -206,7 +263,13 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
             else:
                 req = urllib.request.Request(url)
             
-            req.add_header("Authorization", f"Bearer {_MINIMAX_KEY}")
+            # TODO(security): the Together.ai proxy currently sends the
+            # MINIMAX API key as the Bearer token. Together.ai and
+            # MINIMAX are different services with different keys — this
+            # either silently fails or hits the wrong account. Use
+            # `TOGETHER_API_KEY` once a real key is provisioned.
+            auth_token = TOGETHER_API_KEY or _MINIMAX_KEY
+            req.add_header("Authorization", f"Bearer {auth_token}")
             req.add_header("User-Agent", "Mozilla/5.0")
             req.add_header("Accept", "application/json")
             
@@ -272,10 +335,15 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     import sys
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8889
-    server = http.server.HTTPServer(("0.0.0.0", port), ProxyHandler)
-    print(f"VideoForge running at http://192.168.1.3:{port}")
+    bind_host = os.environ.get("VIDEOFORGE_BIND_HOST", "0.0.0.0")
+    server = http.server.HTTPServer((bind_host, port), ProxyHandler)
+    print(f"VideoForge listening on {bind_host}:{port}")
     print(f"Proxying /api/* -> {COMFYUI}")
     print(f"MiniMax video: configured")
+    if CLOUDINARY_CLOUD_NAME:
+        print(f"Cloudinary: configured (cloud={CLOUDINARY_CLOUD_NAME})")
+    else:
+        print(f"Cloudinary: not configured (optional)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
