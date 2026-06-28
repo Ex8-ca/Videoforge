@@ -857,9 +857,13 @@ function buildWorkflow() {
     // I2V mode: image required
     if (!uploadedImageName) return null;
 
-    // Detect Wan 2.2 A14B MoE (requires two-stage sampling with high+low noise)
+    // Detect Wan 2.2 A14B MoE (requires two-stage sampling with high+low noise).
+    // File pattern: wan2.2_i2v_{high,low}_noise_14B_Q4_K_S.gguf
+    // Match by "wan2.2" + "14b" (lowercased) — there is no literal "a14b" substring
+    // in the filename (it's "_noise_14B_Q4"), so the earlier "a14b" check was wrong.
     const selectedModel = document.getElementById('modelSelect').value || '';
-    if (selectedModel.includes('a14b') || selectedModel.includes('A14B')) {
+    const lcModel = selectedModel.toLowerCase();
+    if (lcModel.includes('wan2.2') && lcModel.includes('14b')) {
         return buildA14BI2VWorkflow(prompt);
     }
 
