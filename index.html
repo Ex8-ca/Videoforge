@@ -77,7 +77,7 @@ tailwind.config = {
     <div class="w-[420px] flex-shrink-0 space-y-5 overflow-y-auto scrollbar-thin" style="max-height: calc(100vh - 120px);">
 
         <!-- Reference Image Upload -->
-        <div class="bg-surface rounded-xl border border-gray-800 p-4">
+        <div id="refImageSection" class="bg-surface rounded-xl border border-gray-800 p-4">
             <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-3">Reference Image</h2>
             <div id="uploadZone" class="upload-zone border-2 border-dashed border-gray-700 rounded-lg p-6 text-center cursor-pointer relative"
                  onclick="document.getElementById('imageUpload').click()"
@@ -173,6 +173,21 @@ tailwind.config = {
                     </select>
                 </div>
 
+                <!-- Mode (I2V vs T2V) -->
+                <div class="flex items-center justify-between">
+                    <label class="text-xs text-gray-400">Generation Mode</label>
+                    <select id="modeSelect" onchange="updateModeUI()"
+                        class="bg-surface-2 border border-gray-700 rounded-lg px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-primary max-w-[220px]">
+                        <option value="i2v" selected>Image-to-Video (I2V)</option>
+                        <option value="t2v">Text-to-Video (T2V)</option>
+                    </select>
+                </div>
+
+                <!-- Mode-specific hint -->
+                <div id="modeHint" class="text-xs text-gray-500 italic">
+                    I2V: drop a reference image below.
+                </div>
+
                 <!-- Seed -->
                 <div class="flex items-center justify-between">
                     <label class="text-xs text-gray-400">Seed</label>
@@ -230,11 +245,16 @@ tailwind.config = {
                     <label class="text-xs text-gray-400">Scheduler</label>
                     <select id="schedulerSelect"
                         class="bg-surface-2 border border-gray-700 rounded-lg px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-primary">
-                        <option value="simple" selected>Simple</option>
-                        <option value="normal">Normal</option>
-                        <option value="karras">Karras</option>
-                        <option value="exponential">Exponential</option>
-                        <option value="sgm_uniform">SGM Uniform</option>
+                        <option value="unipc">UniPC</option>
+                        <option value="euler" selected>Euler</option>
+                        <option value="dpm++">DPM++</option>
+                        <option value="dpm++_sde">DPM++ SDE</option>
+                        <option value="deis">DEIS</option>
+                        <option value="lcm">LCM</option>
+                        <option value="flowmatch_distill">FlowMatch Distill</option>
+                        <option value="flowmatch_causvid">FlowMatch CausVid</option>
+                        <option value="res_multistep">Res Multistep</option>
+                        <option value="sa_ode_stable">SA-ODE Stable</option>
                     </select>
                 </div>
 
@@ -447,7 +467,8 @@ let isGenerating = false;
 // ============================================================
 window.addEventListener('DOMContentLoaded', () => {
     checkServer();
-    loadModels();
+    loadLocalModels();
+    updateModeUI();
     
     // Load history from localStorage
     const savedHistory = localStorage.getItem('videoforge_history');
@@ -489,7 +510,7 @@ async function checkServer() {
 // ============================================================
 // Model Loading (auto-populate from object_info)
 // ============================================================
-async function loadModels() {
+async function loadLocalModels() {
     try {
         const resp = await fetch(`${COMFYUI_URL}/object_info/UnetLoaderGGUF`);
         if (resp.ok) {
@@ -520,6 +541,54 @@ async function loadModels() {
     } catch(e) {
         console.warn('Could not load model list:', e);
         document.getElementById('modelSelect').innerHTML = '<option value="">Error loading models</option>';
+    }
+}
+
+// ============================================================
+// Mode toggle (I2V vs T2V) — shows/hides image upload and updates
+// defaults for steps / CFG / sampler / scheduler / resolution
+// ============================================================
+function updateModeUI() {
+    const mode = document.getElementById('modeSelect').value;
+    const imgSection = document.getElementById('refImageSection');
+    const hint = document.getElementById('modeHint');
+
+    if (mode === 't2v') {
+        // Hide image upload — not needed for text-to-video
+        imgSection.style.display = 'none';
+        hint.textContent = 'T2V: just write a prompt, no image needed. ~60s gen time.';
+        // T2V defaults: 480P forced (720P wrapper bug), 20 steps, CFG 5.0, euler/euler
+        // Don't change width/height selects — workflow overrides to 480P internally
+        const stepsSlider = document.getElementById('stepsSlider');
+        if (stepsSlider) { stepsSlider.value = '20'; }
+        const stepsLabel = document.getElementById('stepsValue');
+        if (stepsLabel) { stepsLabel.textContent = '20'; }
+        const cfgSlider = document.getElementById('cfgSlider');
+        if (cfgSlider) { cfgSlider.value = '5.0'; }
+        const cfgLabel = document.getElementById('cfgValue');
+        if (cfgLabel) { cfgLabel.textContent = '5.0'; }
+        const samplerSel = document.getElementById('samplerSelect');
+        if (samplerSel) { samplerSel.value = 'euler'; }
+        const schedSel = document.getElementById('schedulerSelect');
+        if (schedSel) { schedSel.value = 'euler'; }
+    } else {
+        // I2V — show image upload, restore I2V defaults
+        imgSection.style.display = '';
+        hint.textContent = 'I2V: drop a reference image below.';
+        if (document.getElementById('widthSelect')) document.getElementById('widthSelect').value = '832';
+        if (document.getElementById('heightSelect')) document.getElementById('heightSelect').value = '480';
+        const stepsSlider = document.getElementById('stepsSlider');
+        if (stepsSlider) { stepsSlider.value = '20'; }
+        const stepsLabel = document.getElementById('stepsValue');
+        if (stepsLabel) { stepsLabel.textContent = '20'; }
+        const cfgSlider = document.getElementById('cfgSlider');
+        if (cfgSlider) { cfgSlider.value = '6.0'; }
+        const cfgLabel = document.getElementById('cfgValue');
+        if (cfgLabel) { cfgLabel.textContent = '6.0'; }
+        const samplerSel = document.getElementById('samplerSelect');
+        if (samplerSel) { samplerSel.value = 'uni_pc'; }
+        const schedSel = document.getElementById('schedulerSelect');
+        if (schedSel) { schedSel.value = 'unipc'; }
     }
 }
 
@@ -693,61 +762,79 @@ function enhancePrompt() {
 function buildWorkflow() {
     const prompt = document.getElementById('promptInput').value.trim();
     if (!prompt) return null;
+
+    const mode = (document.getElementById('modeSelect')?.value) || 'i2v';
+
+    // T2V mode: image not required
+    if (mode === 't2v') {
+        return buildT2VWorkflow(prompt);
+    }
+
+    // I2V mode: image required
     if (!uploadedImageName) return null;
 
+    // I2V workflow using kijai's ComfyUI-WanVideoWrapper (Wan 2.1 14B).
+    // The old UnetLoaderGGUF + KSampler pattern loads the GGUF as T2V (16 channels)
+    // and crashes when fed an I2V-shaped image_embeds (48 channels).
+    // This is the only working pattern — verified end-to-end 2026-06-28.
     const negPrompt = document.getElementById('negPromptInput').value.trim() || '';
     const width = parseInt(document.getElementById('widthSelect').value) || 832;
     const height = parseInt(document.getElementById('heightSelect').value) || 480;
     const frames = parseInt(document.getElementById('framesInput').value) || 81;
     const seedVal = parseInt(document.getElementById('seedInput').value);
     const seed = seedVal === -1 ? Math.floor(Math.random() * 2147483647) : seedVal;
-    const steps = parseInt(document.getElementById('stepsSlider').value);
-    const cfg = parseFloat(document.getElementById('cfgSlider').value);
-    const sampler = document.getElementById('samplerSelect').value;
-    const scheduler = document.getElementById('schedulerSelect').value;
-    const shift = parseFloat(document.getElementById('shiftSlider').value);
-    const fps = parseInt(document.getElementById('fpsSelect').value);
-    const modelName = document.getElementById('modelSelect').value;
+    const steps = parseInt(document.getElementById('stepsSlider').value) || 20;
+    const cfg = parseFloat(document.getElementById('cfgSlider').value) || 6.0;
+    const sampler = document.getElementById('samplerSelect')?.value || 'uni_pc';
+    const scheduler = document.getElementById('schedulerSelect')?.value || 'unipc';
+    const fps = parseInt(document.getElementById('fpsSelect').value) || 16;
+    const modelName = document.getElementById('modelSelect').value || 'wan2.1-i2v-14b-480p-Q5_K_S.gguf';
 
     lastSeed = seed;
 
     const workflow = {};
 
-    // Node 37: UnetLoaderGGUF
-    workflow["37"] = {
-        "class_type": "UnetLoaderGGUF",
+    // Load GGUF via kijai's WanVideoModelLoader (knows Wan I2V architecture)
+    workflow["200"] = {
+        "class_type": "WanVideoModelLoader",
         "inputs": {
-            "unet_name": modelName
+            "model": modelName,
+            "base_precision": "bf16",
+            "quantization": "disabled",
+            "load_device": "offload_device"
         }
     };
 
-    // Node 38: CLIPLoader (type=wan)
-    workflow["38"] = {
-        "class_type": "CLIPLoader",
+    // Load UMT5 text encoder (scaled fp8, the Wan 2.1 variant)
+    workflow["201"] = {
+        "class_type": "LoadWanVideoT5TextEncoder",
         "inputs": {
-            "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-            "type": "wan"
+            "model_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "precision": "bf16"
         }
     };
 
-    // Node 39: VAELoader
-    workflow["39"] = {
-        "class_type": "VAELoader",
+    // Encode prompt into text embeddings
+    workflow["202"] = {
+        "class_type": "WanVideoTextEncode",
         "inputs": {
-            "vae_name": "wan_2.1_vae.safetensors"
+            "t5": ["201", 0],
+            "positive_prompt": prompt,
+            "negative_prompt": negPrompt
         }
     };
 
-    // Node 49: CLIPVisionLoader
-    workflow["49"] = {
-        "class_type": "CLIPVisionLoader",
+    // Load Wan 2.1 VAE (matches Wan 2.1 14B I2V latent space)
+    workflow["203"] = {
+        "class_type": "WanVideoVAELoader",
         "inputs": {
-            "clip_name": "clip_vision_h.safetensors"
+            "model_name": "wan_2.1_vae.safetensors",
+            "precision": "bf16"
         }
     };
 
-    // Node 52: LoadImage
-    workflow["52"] = {
+    // Load reference image
+    workflow["204"] = {
         "class_type": "LoadImage",
         "inputs": {
             "image": uploadedImageName,
@@ -755,100 +842,63 @@ function buildWorkflow() {
         }
     };
 
-    // Node 51: CLIPVisionEncode
-    // Inputs: clip_vision from [49], image from [52]
-    workflow["51"] = {
-        "class_type": "CLIPVisionEncode",
+    // Encode start image as I2V embeddings (this is the difference from T2V)
+    workflow["205"] = {
+        "class_type": "WanVideoImageToVideoEncode",
         "inputs": {
-            "clip_vision": ["49", 0],
-            "image": ["52", 0],
-            "crop": "none"
-        }
-    };
-
-    // Node 6: CLIPTextEncode (positive)
-    workflow["6"] = {
-        "class_type": "CLIPTextEncode",
-        "inputs": {
-            "clip": ["38", 0],
-            "text": prompt
-        }
-    };
-
-    // Node 7: CLIPTextEncode (negative)
-    workflow["7"] = {
-        "class_type": "CLIPTextEncode",
-        "inputs": {
-            "clip": ["38", 0],
-            "text": negPrompt
-        }
-    };
-
-    // Node 50: WanImageToVideo
-    // Inputs: positive from [6], negative from [7], vae from [39],
-    //         clip_vision_output from [51], start_image from [52]
-    workflow["50"] = {
-        "class_type": "WanImageToVideo",
-        "inputs": {
-            "positive": ["6", 0],
-            "negative": ["7", 0],
-            "vae": ["39", 0],
-            "clip_vision_output": ["51", 0],
-            "start_image": ["52", 0],
+            "vae": ["203", 0],
+            "start_image": ["204", 0],
             "width": width,
             "height": height,
-            "length": frames,
-            "batch_size": 1
+            "num_frames": frames,
+            "noise_aug_strength": 0.0,
+            "start_latent_strength": 1.0,
+            "end_latent_strength": 1.0,
+            "force_offload": true
         }
     };
 
-    // Node 54: ModelSamplingSD3
-    workflow["54"] = {
-        "class_type": "ModelSamplingSD3",
+    // Sample using WanVideoSampler (handles the 48-channel I2V shape correctly)
+    workflow["206"] = {
+        "class_type": "WanVideoSampler",
         "inputs": {
-            "model": ["37", 0],
-            "shift": shift
-        }
-    };
-
-    // Node 3: KSampler
-    workflow["3"] = {
-        "class_type": "KSampler",
-        "inputs": {
-            "model": ["54", 0],
-            "positive": ["50", 0],
-            "negative": ["50", 1],
-            "latent_image": ["50", 2],
-            "seed": seed,
+            "model": ["200", 0],
+            "image_embeds": ["205", 0],
+            "text_embeds": ["202", 0],
             "steps": steps,
             "cfg": cfg,
-            "sampler_name": sampler,
+            "shift": 5.0,
+            "seed": seed,
+            "force_offload": true,
+            "riflex_freq_index": 0,
             "scheduler": scheduler,
-            "denoise": 1.0
+            "sampler": sampler
         }
     };
 
-    // Node 8: VAEDecode
-    workflow["8"] = {
-        "class_type": "VAEDecode",
+    // Decode latents to frames
+    workflow["207"] = {
+        "class_type": "WanVideoDecode",
         "inputs": {
-            "samples": ["3", 0],
-            "vae": ["39", 0]
+            "vae": ["203", 0],
+            "samples": ["206", 0],
+            "enable_vae_tiling": false,
+            "tile_x": 272,
+            "tile_y": 272,
+            "tile_stride_x": 144,
+            "tile_stride_y": 128
         }
     };
 
-    // Node 28: VHS_VideoCombine (MP4 output)
-    workflow["28"] = {
+    // Combine frames into MP4
+    workflow["208"] = {
         "class_type": "VHS_VideoCombine",
         "inputs": {
-            "images": ["8", 0],
+            "images": ["207", 0],
             "frame_rate": fps,
             "loop_count": 0,
-            "filename_prefix": "videoforge",
+            "filename_prefix": "videoforge_i2v",
             "format": "video/h264-mp4",
-            "pix_fmt": "yuv420p",
-            "crf": 23,
-            "save_metadata": false,
             "pingpong": false,
             "save_output": true
         }
@@ -858,7 +908,133 @@ function buildWorkflow() {
 }
 
 // ============================================================
-// Generation Mode Toggle
+// T2V Workflow — uses kijai's ComfyUI-WanVideoWrapper for Wan 2.2 5B
+// No reference image required. Text-to-video generation.
+// IMPORTANT: 720P is currently broken in the wrapper (tensor shape mismatch).
+// We force 480P (832x480) for stability.
+// Tuned for quality: 20 steps, CFG 5.0, euler/euler.
+// Generation time: ~60s. Quality: sharp, coherent, prompt-faithful.
+// Verified working end-to-end on 2026-06-28.
+// ============================================================
+function buildT2VWorkflow(prompt) {
+    const seedVal = parseInt(document.getElementById('seedInput').value);
+    const seed = seedVal === -1 ? Math.floor(Math.random() * 2147483647) : seedVal;
+    const fps = parseInt(document.getElementById('fpsSelect').value) || 24;
+    const negPrompt = document.getElementById('negPromptInput').value.trim()
+        || 'blurry, low quality, washed out, low contrast, jpeg artifacts, ugly, distorted';
+    const modelName = document.getElementById('modelSelect').value || 'Wan2.2-TI2V-5B-Q5_K_M.gguf';
+
+    // Force 480P — 720P triggers a wrapper bug (45 vs 44 tensor mismatch)
+    const width = 832;
+    const height = 480;
+    const frames = 81;
+    const steps = 20;        // 4 = fast but smeared; 20 = sharp
+    const cfg = 5.0;          // 1.0 = distilled; 5.0 = balanced; 7.0+ = overcooked
+
+    lastSeed = seed;
+
+    const wf = {};
+
+    // Load GGUF model
+    wf["100"] = {
+        "class_type": "WanVideoModelLoader",
+        "inputs": {
+            "model": modelName,
+            "base_precision": "bf16",
+            "quantization": "disabled",
+            "load_device": "offload_device"
+        }
+    };
+
+    // Load UMT5 text encoder
+    wf["101"] = {
+        "class_type": "LoadWanVideoT5TextEncoder",
+        "inputs": {
+            "model_name": "umt5-xxl-enc-fp8_e4m3fn.safetensors",
+            "precision": "bf16"
+        }
+    };
+
+    // Encode prompt into text embeddings
+    wf["102"] = {
+        "class_type": "WanVideoTextEncode",
+        "inputs": {
+            "t5": ["101", 0],
+            "positive_prompt": prompt,
+            "negative_prompt": negPrompt
+        }
+    };
+
+    // Load VAE
+    wf["103"] = {
+        "class_type": "WanVideoVAELoader",
+        "inputs": {
+            "model_name": "wan2.2_vae.safetensors",
+            "precision": "bf16"
+        }
+    };
+
+    // T2V: create empty image embeddings (no source image needed)
+    wf["104"] = {
+        "class_type": "WanVideoEmptyEmbeds",
+        "inputs": {
+            "width": width,
+            "height": height,
+            "num_frames": frames
+        }
+    };
+
+    // Sample using WanVideoSampler (text_embeds + image_embeds, no separate samples input needed)
+    wf["105"] = {
+        "class_type": "WanVideoSampler",
+        "inputs": {
+            "model": ["100", 0],
+            "image_embeds": ["104", 0],
+            "text_embeds": ["102", 0],
+            "steps": steps,
+            "cfg": cfg,
+            "shift": 5.0,
+            "seed": seed,
+            "force_offload": true,
+            "riflex_freq_index": 0,
+            "scheduler": "euler",
+            "sampler": "euler"
+        }
+    };
+
+    // Decode latents to frames
+    wf["106"] = {
+        "class_type": "WanVideoDecode",
+        "inputs": {
+            "vae": ["103", 0],
+            "samples": ["105", 0],
+            "enable_vae_tiling": false,
+            "tile_x": 272,
+            "tile_y": 272,
+            "tile_stride_x": 144,
+            "tile_stride_y": 128
+        }
+    };
+
+    // Combine frames into MP4
+    wf["107"] = {
+        "class_type": "VHS_VideoCombine",
+        "inputs": {
+            "images": ["106", 0],
+            "frame_rate": fps,
+            "loop_count": 0,
+            "filename_prefix": "videoforge_t2v",
+            "format": "video/h264-mp4",
+            "pingpong": false,
+            "save_output": true
+        }
+    };
+
+    return wf;
+}
+
+// ============================================================
+// Generation mode toggle (Local vs Together)
 // ============================================================
 let genMode = 'local'; // 'local' or 'together'
 
@@ -1496,8 +1672,9 @@ async function generate() {
     }
     
     // Local generation
-    if (!uploadedImageName) {
-        alert('Please upload a reference image first');
+    const mode = (document.getElementById('modeSelect')?.value) || 'i2v';
+    if (mode === 'i2v' && !uploadedImageName) {
+        alert('Please upload a reference image first (or switch to Text-to-Video mode)');
         return;
     }
 
@@ -1700,16 +1877,18 @@ function renderHistory() {
         strip.innerHTML = '<div class="text-xs text-gray-600 py-6 text-center w-full">Generated videos will appear here</div>';
         return;
     }
-    strip.innerHTML = history.map((h, i) => `
+    strip.innerHTML = history.map((h, i) => {
+        const isVideo = h.url.includes('.mp4') || h.url.includes('.webm') || h.url.includes('.gif');
+        return `
         <div class="history-thumb flex-shrink-0 w-28 h-20 rounded-lg overflow-hidden border-2 border-transparent hover:border-primary relative group" onclick="showHistoryItem(${i})">
-            ${h.url.endsWith('.mp4') || h.url.includes('.mp4?') || h.url.endsWith('.webm') || h.url.includes('.webm?')
+            ${isVideo
                 ? `<video src="${h.url}" class="w-full h-full object-cover" muted preload="metadata" playsinline></video>`
                 : `<img src="${h.url}" class="w-full h-full object-cover" alt="History ${i}"/>`}
             <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                 <span class="text-xs text-white">${h.seed}</span>
             </div>
         </div>
-    `).join('');
+    `}).join('');
 }
 
 function showHistoryItem(index) {

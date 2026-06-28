@@ -76,6 +76,29 @@ class ProxyHandler(http.server.SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def do_HEAD(self):
+        # ComfyUI's /view endpoint doesn't support HEAD and returns 404.
+        # Browsers issue HEAD before loading <video>/<img> for size checks,
+        # which breaks history thumbnails. Intercept HEAD on /view and
+        # do a real GET to learn the content length, then return 200.
+        if self.path.startswith("/api/view"):
+            try:
+                req = urllib.request.Request(COMFYUI + self.path[4:], method="GET")
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = resp.read()
+                    self.send_response(200)
+                    ct = resp.headers.get("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Type", ct)
+                    self.send_header("Content-Length", len(data))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+            except Exception as e:
+                print(f"[HEAD view] Error: {e}")
+                self.send_response(404)
+                self.end_headers()
+        else:
+            self.do_GET()
+
     def do_POST(self):
         if self.path.startswith("/api/"):
             self.proxy("POST")

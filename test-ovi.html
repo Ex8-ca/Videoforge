@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>OVI Test</title>
+</head>
+<body>
+<h1>OVI Workflow Test</h1>
+<p>This shows the exact workflow being sent to ComfyUI</p>
+<pre id="workflow"></pre>
+<script>
+const workflow = {
+    "1": {
+        "class_type": "OviEngineLoader",
+        "inputs": {
+            "model_precision": "Ovi-11B-fp8.safetensors",
+            "cpu_offload": true,
+            "device": 0
+        }
+    },
+    "2": {
+        "class_type": "OviWanComponentLoader",
+        "inputs": {
+            "engine": ["1", 0],
+            "vae_file": "wan2.2_vae.safetensors",
+            "umt5_file": "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+        }
+    }
+};
+document.getElementById('workflow').textContent = JSON.stringify(workflow, null, 2);
+</script>
+</body>
+</html>
