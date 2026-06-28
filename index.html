@@ -858,11 +858,34 @@ function buildWorkflow() {
         }
     };
 
-    // Sample using WanVideoSampler (handles the 48-channel I2V shape correctly)
+    // Block swap: required for 14B I2V on 16GB GPUs. Swaps 20/40 transformer
+    // blocks to CPU during sampling (half on GPU, half on CPU) so the model
+    // fits in VRAM alongside the T5 encoder and latents. Without this, 14B I2V
+    // OOMs at sample time. Verified end-to-end 2026-06-28 with Q4_K_S + 41 frames.
     workflow["206"] = {
-        "class_type": "WanVideoSampler",
+        "class_type": "WanVideoBlockSwap",
+        "inputs": {
+            "blocks_to_swap": 20,
+            "offload_img_emb": true,
+            "offload_txt_emb": true
+        }
+    };
+
+    // Apply block swap to model — this clones the patcher and injects
+    // transformer_options["block_swap_args"], which WanVideoSampler reads.
+    workflow["207"] = {
+        "class_type": "WanVideoSetBlockSwap",
         "inputs": {
             "model": ["200", 0],
+            "block_swap_args": ["206", 0]
+        }
+    };
+
+    // Sample using WanVideoSampler (handles the 48-channel I2V shape correctly)
+    workflow["208"] = {
+        "class_type": "WanVideoSampler",
+        "inputs": {
+            "model": ["207", 0],
             "image_embeds": ["205", 0],
             "text_embeds": ["202", 0],
             "steps": steps,
@@ -877,11 +900,11 @@ function buildWorkflow() {
     };
 
     // Decode latents to frames
-    workflow["207"] = {
+    workflow["209"] = {
         "class_type": "WanVideoDecode",
         "inputs": {
             "vae": ["203", 0],
-            "samples": ["206", 0],
+            "samples": ["208", 0],
             "enable_vae_tiling": false,
             "tile_x": 272,
             "tile_y": 272,
@@ -891,10 +914,10 @@ function buildWorkflow() {
     };
 
     // Combine frames into MP4
-    workflow["208"] = {
+    workflow["210"] = {
         "class_type": "VHS_VideoCombine",
         "inputs": {
-            "images": ["207", 0],
+            "images": ["209", 0],
             "frame_rate": fps,
             "loop_count": 0,
             "filename_prefix": "videoforge_i2v",
