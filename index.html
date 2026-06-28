@@ -167,7 +167,7 @@ tailwind.config = {
                 <!-- Model -->
                 <div class="flex items-center justify-between">
                     <label class="text-xs text-gray-400">Model (GGUF)</label>
-                    <select id="modelSelect"
+                    <select id="modelSelect" onchange="updateDefaultsForModel()"
                         class="bg-surface-2 border border-gray-700 rounded-lg px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-primary max-w-[220px]">
                         <option value="">Loading...</option>
                     </select>
@@ -512,31 +512,47 @@ async function checkServer() {
 // ============================================================
 async function loadLocalModels() {
     try {
-        const resp = await fetch(`${COMFYUI_URL}/object_info/UnetLoaderGGUF`);
+        // kijai's WanVideoModelLoader is what the workflows actually use.
+        // It scans diffusion_models/ and unet_gguf/ for GGUF + safetensors.
+        const resp = await fetch(`${COMFYUI_URL}/object_info/WanVideoModelLoader`);
         if (resp.ok) {
             const data = await resp.json();
-            const info = data.UnetLoaderGGUF;
-            const models = info?.input?.required?.unet_name?.[0] || [];
+            const info = data.WanVideoModelLoader;
+            const models = info?.input?.required?.model?.[0] || [];
             const select = document.getElementById('modelSelect');
             select.innerHTML = '';
             if (models.length === 0) {
                 select.innerHTML = '<option value="">No GGUF models found</option>';
                 return;
             }
-            models.forEach(m => {
+            // Default priority: Wan 2.2 A14B high noise > Wan 2.1 I2V > Wan 2.2 5B T2V > first
+            const sortedModels = [...models].sort((a, b) => {
+                const priority = (m) => {
+                    const lc = m.toLowerCase();
+                    // Match A14B: filename like "a14b" or "14b" in wan2.2 context
+                    // (file is e.g. wan2.2_i2v_high_noise_14B_Q4_K_S.gguf)
+                    const isWan22 = lc.includes('wan2.2');
+                    const is14b = lc.includes('14b');
+                    if (isWan22 && is14b && lc.includes('high_noise')) return 0;
+                    if (isWan22 && is14b) return 1;
+                    if (lc.includes('wan2.1') && lc.includes('i2v')) return 2;
+                    if (lc.includes('ti2v-5b')) return 3;
+                    return 4;
+                };
+                return priority(a) - priority(b);
+            });
+            sortedModels.forEach(m => {
                 const opt = document.createElement('option');
                 opt.value = m;
                 opt.textContent = m;
-                // Select wan2.1 i2v models by default
-                if (m.toLowerCase().includes('wan2.1') && m.toLowerCase().includes('i2v')) {
-                    opt.selected = true;
-                }
                 select.appendChild(opt);
             });
-            // Fallback: select first if none matched
-            if (!select.value && models.length > 0) {
-                select.value = models[0];
+            // First model in sorted list has highest priority
+            if (sortedModels.length > 0) {
+                select.value = sortedModels[0];
             }
+            // Apply per-model defaults (steps, CFG, sampler, scheduler, resolution)
+            updateDefaultsForModel();
         }
     } catch(e) {
         console.warn('Could not load model list:', e);
@@ -557,38 +573,106 @@ function updateModeUI() {
         // Hide image upload — not needed for text-to-video
         imgSection.style.display = 'none';
         hint.textContent = 'T2V: just write a prompt, no image needed. ~60s gen time.';
-        // T2V defaults: 480P forced (720P wrapper bug), 20 steps, CFG 5.0, euler/euler
-        // Don't change width/height selects — workflow overrides to 480P internally
-        const stepsSlider = document.getElementById('stepsSlider');
-        if (stepsSlider) { stepsSlider.value = '20'; }
-        const stepsLabel = document.getElementById('stepsValue');
-        if (stepsLabel) { stepsLabel.textContent = '20'; }
-        const cfgSlider = document.getElementById('cfgSlider');
-        if (cfgSlider) { cfgSlider.value = '5.0'; }
-        const cfgLabel = document.getElementById('cfgValue');
-        if (cfgLabel) { cfgLabel.textContent = '5.0'; }
-        const samplerSel = document.getElementById('samplerSelect');
-        if (samplerSel) { samplerSel.value = 'euler'; }
-        const schedSel = document.getElementById('schedulerSelect');
-        if (schedSel) { schedSel.value = 'euler'; }
     } else {
-        // I2V — show image upload, restore I2V defaults
+        // I2V — show image upload
         imgSection.style.display = '';
         hint.textContent = 'I2V: drop a reference image below.';
-        if (document.getElementById('widthSelect')) document.getElementById('widthSelect').value = '832';
-        if (document.getElementById('heightSelect')) document.getElementById('heightSelect').value = '480';
-        const stepsSlider = document.getElementById('stepsSlider');
-        if (stepsSlider) { stepsSlider.value = '20'; }
-        const stepsLabel = document.getElementById('stepsValue');
-        if (stepsLabel) { stepsLabel.textContent = '20'; }
-        const cfgSlider = document.getElementById('cfgSlider');
-        if (cfgSlider) { cfgSlider.value = '6.0'; }
-        const cfgLabel = document.getElementById('cfgValue');
-        if (cfgLabel) { cfgLabel.textContent = '6.0'; }
-        const samplerSel = document.getElementById('samplerSelect');
-        if (samplerSel) { samplerSel.value = 'uni_pc'; }
-        const schedSel = document.getElementById('schedulerSelect');
-        if (schedSel) { schedSel.value = 'unipc'; }
+    }
+
+    // Apply per-model defaults (steps, CFG, sampler, scheduler, resolution).
+    // Reads the currently selected model from the dropdown and picks the
+    // best-tuned settings. Called on mode change AND model change so the UI
+    // always reflects the right defaults for what's actually about to run.
+    updateDefaultsForModel();
+}
+
+// Per-model default settings. Each model has its own optimal sampler/CFG/etc.
+// Verified end-to-end 2026-06-28 — see README "Recommended settings".
+function updateDefaultsForModel() {
+    const modelName = (document.getElementById('modelSelect')?.value || '').toLowerCase();
+    const mode = document.getElementById('modeSelect')?.value || 'i2v';
+    const hint = document.getElementById('modeHint');
+
+    // Default for any model we don't recognize: fall back to mode defaults
+    const defaults = {
+        steps: 20,
+        cfg: mode === 't2v' ? 5.0 : 6.0,
+        sampler: mode === 't2v' ? 'euler' : 'uni_pc',
+        scheduler: mode === 't2v' ? 'euler' : 'unipc',
+        width: 832,
+        height: 480,
+        modelNote: ''
+    };
+
+    // Wan 2.2 5B T2V (TI2V unified model)
+    if (modelName.includes('ti2v-5b') || (mode === 't2v' && modelName.includes('wan2.2'))) {
+        defaults.steps = 20;
+        defaults.cfg = 5.0;
+        defaults.sampler = 'euler';
+        defaults.scheduler = 'euler';
+        defaults.width = 832;
+        defaults.height = 480;
+        defaults.modelNote = 'T2V Wan 2.2 5B — euler/euler, CFG 5.0, 480P. ~60s gen time.';
+    }
+    // Wan 2.2 A14B I2V (MoE, two experts)
+    // File pattern: wan2.2_i2v_{high,low}_noise_14B_Q4_K_S.gguf
+    else if (modelName.includes('wan2.2') && modelName.includes('14b')) {
+        defaults.steps = 20;
+        defaults.cfg = 1.0;
+        defaults.sampler = 'euler';
+        defaults.scheduler = 'dpm++_sde';
+        defaults.width = 832;
+        defaults.height = 480;
+        defaults.modelNote = 'I2V Wan 2.2 A14B MoE — CFG 1.0, dpm++_sde, block swap auto. ~3min gen time.';
+    }
+    // Wan 2.1 14B I2V
+    else if (modelName.includes('wan2.1') || modelName.includes('i2v-14b')) {
+        defaults.steps = 20;
+        defaults.cfg = 6.0;
+        defaults.sampler = 'uni_pc';
+        defaults.scheduler = 'unipc';
+        defaults.width = 832;
+        defaults.height = 480;
+        defaults.modelNote = 'I2V Wan 2.1 14B — uni_pc/unipc, CFG 6.0, block swap auto. ~6min gen time.';
+    }
+    // T2V mode but model not matched above — fall back to T2V defaults
+    else if (mode === 't2v') {
+        defaults.steps = 20;
+        defaults.cfg = 5.0;
+        defaults.sampler = 'euler';
+        defaults.scheduler = 'euler';
+        defaults.modelNote = 'T2V — euler/euler, CFG 5.0. ~60s gen time.';
+    }
+
+    // Apply to UI
+    const stepsSlider = document.getElementById('stepsSlider');
+    if (stepsSlider) { stepsSlider.value = String(defaults.steps); }
+    const stepsLabel = document.getElementById('stepsValue');
+    if (stepsLabel) { stepsLabel.textContent = String(defaults.steps); }
+
+    const cfgSlider = document.getElementById('cfgSlider');
+    if (cfgSlider) { cfgSlider.value = String(defaults.cfg); }
+    const cfgLabel = document.getElementById('cfgValue');
+    if (cfgLabel) { cfgLabel.textContent = String(defaults.cfg); }
+
+    const samplerSel = document.getElementById('samplerSelect');
+    if (samplerSel) { samplerSel.value = defaults.sampler; }
+
+    const schedSel = document.getElementById('schedulerSelect');
+    if (schedSel) { schedSel.value = defaults.scheduler; }
+
+    const widthSel = document.getElementById('widthSelect');
+    if (widthSel && widthSel.querySelector(`option[value="${defaults.width}"]`)) {
+        widthSel.value = String(defaults.width);
+    }
+    const heightSel = document.getElementById('heightSelect');
+    if (heightSel && heightSel.querySelector(`option[value="${defaults.height}"]`)) {
+        heightSel.value = String(defaults.height);
+    }
+
+    // Show model-specific hint if set, otherwise keep the mode hint
+    if (defaults.modelNote && hint) {
+        hint.textContent = defaults.modelNote;
     }
 }
 
