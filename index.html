@@ -773,6 +773,12 @@ function buildWorkflow() {
     // I2V mode: image required
     if (!uploadedImageName) return null;
 
+    // Detect Wan 2.2 A14B MoE (requires two-stage sampling with high+low noise)
+    const selectedModel = document.getElementById('modelSelect').value || '';
+    if (selectedModel.includes('a14b') || selectedModel.includes('A14B')) {
+        return buildA14BI2VWorkflow(prompt);
+    }
+
     // I2V workflow using kijai's ComfyUI-WanVideoWrapper (Wan 2.1 14B).
     // The old UnetLoaderGGUF + KSampler pattern loads the GGUF as T2V (16 channels)
     // and crashes when fed an I2V-shaped image_embeds (48 channels).
@@ -921,6 +927,178 @@ function buildWorkflow() {
             "frame_rate": fps,
             "loop_count": 0,
             "filename_prefix": "videoforge_i2v",
+            "format": "video/h264-mp4",
+            "pingpong": false,
+            "save_output": true
+        }
+    };
+
+    return workflow;
+}
+
+// ============================================================
+// A14B I2V Workflow — uses kijai's ComfyUI-WanVideoWrapper for Wan 2.2 14B MoE.
+// Two-expert Mixture-of-Experts: high-noise for first half of denoising
+// (steps 0-10), low-noise for second half (steps 10-20). Each expert is
+// 8.75 GB on disk (Q4_K_S GGUF); only one is in memory at a time.
+// Block swap swaps 20/40 transformer blocks to CPU during sampling so the
+// active expert fits in 16GB VRAM alongside the T5 encoder and latents.
+// Verified end-to-end 2026-06-28: 512x288/41f = ~95s, 832x480/41f = ~190s.
+// ============================================================
+function buildA14BI2VWorkflow(prompt) {
+    const negPrompt = document.getElementById('negPromptInput').value.trim() || '';
+    const width = parseInt(document.getElementById('widthSelect').value) || 832;
+    const height = parseInt(document.getElementById('heightSelect').value) || 480;
+    const frames = parseInt(document.getElementById('framesInput').value) || 41;
+    const seedVal = parseInt(document.getElementById('seedInput').value);
+    const seed = seedVal === -1 ? Math.floor(Math.random() * 2147483647) : seedVal;
+    const steps = parseInt(document.getElementById('stepsSlider').value) || 20;
+    const fps = parseInt(document.getElementById('fpsSelect').value) || 16;
+    const modelName = document.getElementById('modelSelect').value;
+
+    lastSeed = seed;
+
+    const workflow = {};
+
+    // Derive high/low noise filenames from selected model. The bullerwins repo
+    // uses lowercase naming: wan2.2_i2v_{high,low}_noise_14B_Q4_K_S.gguf.
+    // We assume the user picked the high-noise file and derive the low-noise name.
+    let highName, lowName;
+    if (modelName.includes('low_noise')) {
+        lowName = modelName;
+        highName = modelName.replace('low_noise', 'high_noise');
+    } else {
+        highName = modelName;
+        lowName = modelName.replace('high_noise', 'low_noise');
+    }
+
+    // T5 encoder (shared between both experts)
+    workflow["100"] = {
+        "class_type": "LoadWanVideoT5TextEncoder",
+        "inputs": { "model_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "precision": "bf16" }
+    };
+    workflow["101"] = {
+        "class_type": "WanVideoTextEncode",
+        "inputs": { "t5": ["100", 0], "positive_prompt": prompt, "negative_prompt": negPrompt }
+    };
+
+    // VAE (shared)
+    workflow["102"] = {
+        "class_type": "WanVideoVAELoader",
+        "inputs": { "model_name": "wan_2.1_vae.safetensors", "precision": "bf16" }
+    };
+
+    // Load image
+    workflow["103"] = {
+        "class_type": "LoadImage",
+        "inputs": { "image": uploadedImageName, "upload": "image" }
+    };
+
+    // Image-to-video embeddings (shared)
+    workflow["104"] = {
+        "class_type": "WanVideoImageToVideoEncode",
+        "inputs": {
+            "vae": ["102", 0],
+            "start_image": ["103", 0],
+            "width": width,
+            "height": height,
+            "num_frames": frames,
+            "noise_aug_strength": 0.0,
+            "start_latent_strength": 1.0,
+            "end_latent_strength": 1.0,
+            "force_offload": true
+        }
+    };
+
+    // Block swap args (shared between both experts)
+    workflow["105"] = {
+        "class_type": "WanVideoBlockSwap",
+        "inputs": {
+            "blocks_to_swap": 20,
+            "offload_img_emb": true,
+            "offload_txt_emb": true,
+            "prefetch_blocks": 1
+        }
+    };
+
+    // High-noise expert (steps 0 → half)
+    workflow["200"] = {
+        "class_type": "WanVideoModelLoader",
+        "inputs": {
+            "model": highName,
+            "base_precision": "bf16",
+            "quantization": "disabled",
+            "load_device": "offload_device",
+            "block_swap_args": ["105", 0]
+        }
+    };
+    workflow["201"] = {
+        "class_type": "WanVideoSampler",
+        "inputs": {
+            "model": ["200", 0],
+            "image_embeds": ["104", 0],
+            "text_embeds": ["101", 0],
+            "steps": steps,
+            "cfg": 1.0,
+            "shift": 5.0,
+            "seed": seed,
+            "force_offload": true,
+            "riflex_freq_index": 0,
+            "scheduler": "dpm++_sde",
+            "sampler": "euler",
+            "start_step": 0,
+            "end_step": Math.floor(steps / 2)
+        }
+    };
+
+    // Low-noise expert (steps half → end)
+    workflow["300"] = {
+        "class_type": "WanVideoModelLoader",
+        "inputs": {
+            "model": lowName,
+            "base_precision": "bf16",
+            "quantization": "disabled",
+            "load_device": "offload_device",
+            "block_swap_args": ["105", 0]
+        }
+    };
+    workflow["301"] = {
+        "class_type": "WanVideoSampler",
+        "inputs": {
+            "model": ["300", 0],
+            "image_embeds": ["104", 0],
+            "text_embeds": ["101", 0],
+            "samples": ["201", 0],
+            "steps": steps,
+            "cfg": 1.0,
+            "shift": 5.0,
+            "seed": seed,
+            "force_offload": true,
+            "riflex_freq_index": 0,
+            "scheduler": "dpm++_sde",
+            "sampler": "euler",
+            "start_step": Math.floor(steps / 2),
+            "end_step": -1
+        }
+    };
+
+    // Decode + combine
+    workflow["400"] = {
+        "class_type": "WanVideoDecode",
+        "inputs": {
+            "vae": ["102", 0],
+            "samples": ["301", 0],
+            "enable_vae_tiling": false,
+            "tile_x": 272, "tile_y": 272, "tile_stride_x": 144, "tile_stride_y": 128
+        }
+    };
+    workflow["401"] = {
+        "class_type": "VHS_VideoCombine",
+        "inputs": {
+            "images": ["400", 0],
+            "frame_rate": fps,
+            "loop_count": 0,
+            "filename_prefix": "videoforge_i2v_a14b",
             "format": "video/h264-mp4",
             "pingpong": false,
             "save_output": true
