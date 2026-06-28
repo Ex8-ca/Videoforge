@@ -1,0 +1,1942 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="version" content="1650921027">
+<title>VideoForge — Wan2.1 I2V Frontend</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet"/>
+<script>
+// Cache-bust: reload on any change
+tailwind.config = {
+    darkMode: "class",
+    theme: {
+        extend: {
+            colors: {
+                primary: "#7c3aed",
+                "primary-hover": "#6d28d9",
+                surface: "#111827",
+                "surface-2": "#1f2937",
+                "surface-3": "#374151",
+                border: "#4b5563",
+            },
+            fontFamily: {
+                sans: ["Inter", "sans-serif"],
+            },
+        },
+    },
+};
+</script>
+<style>
+    body { font-family: 'Inter', sans-serif; }
+    .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+    @keyframes pulse-border {
+        0%, 100% { border-color: #7c3aed; }
+        50% { border-color: #a78bfa; }
+    }
+    .generating { animation: pulse-border 1.5s ease-in-out infinite; }
+    .history-thumb { transition: transform 0.2s; cursor: pointer; }
+    .history-thumb:hover { transform: scale(1.05); }
+    .upload-zone { transition: all 0.2s; }
+    .upload-zone:hover { border-color: #7c3aed; background: rgba(124, 58, 237, 0.05); }
+    .upload-zone.dragover { border-color: #7c3aed; background: rgba(124, 58, 237, 0.1); }
+    video { max-width: 100%; max-height: 100%; }
+</style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+<!-- Header -->
+<header class="border-b border-gray-800 px-6 py-4">
+    <div class="flex items-center justify-between max-w-7xl mx-auto">
+        <div class="flex items-center gap-3">
+            <div class="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
+                <span class="material-icons-outlined text-white text-xl">videocam</span>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold text-white">VideoForge</h1>
+                <p class="text-xs text-gray-500">Wan2.1 I2V &middot; ComfyUI Frontend</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4">
+            <div id="serverStatus" class="flex items-center gap-2 text-sm">
+                <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+                <span class="text-gray-500">Checking server...</span>
+            </div>
+        </div>
+    </div>
+</header>
+
+<!-- Main Layout -->
+<main class="max-w-7xl mx-auto px-6 py-6 flex gap-6" style="min-height: calc(100vh - 73px);">
+
+    <!-- Left Panel: Controls -->
+    <div class="w-[420px] flex-shrink-0 space-y-5 overflow-y-auto scrollbar-thin" style="max-height: calc(100vh - 120px);">
+
+        <!-- Reference Image Upload -->
+        <div class="bg-surface rounded-xl border border-gray-800 p-4">
+            <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-3">Reference Image</h2>
+            <div id="uploadZone" class="upload-zone border-2 border-dashed border-gray-700 rounded-lg p-6 text-center cursor-pointer relative"
+                 onclick="document.getElementById('imageUpload').click()"
+                 ondragover="event.preventDefault();this.classList.add('dragover')"
+                 ondragleave="this.classList.remove('dragover')"
+                 ondrop="handleDrop(event)">
+                <input type="file" id="imageUpload" accept="image/*" class="hidden" onchange="handleImageUpload(this.files[0])"/>
+                <div id="uploadPlaceholder">
+                    <span class="material-icons-outlined text-4xl text-gray-600">cloud_upload</span>
+                    <p class="text-gray-500 text-sm mt-2">Drop image or click to upload</p>
+                    <p class="text-gray-700 text-xs mt-1">Reference frame for I2V generation</p>
+                </div>
+                <div id="uploadPreview" class="hidden">
+                    <img id="refThumb" class="max-h-32 mx-auto rounded-lg" alt="Reference"/>
+                    <p class="text-xs text-gray-500 mt-2" id="refFileName"></p>
+                </div>
+            </div>
+            <button onclick="clearRefImage()" id="clearRefBtn" class="hidden mt-2 text-xs text-gray-500 hover:text-gray-400 flex items-center gap-1">
+                <span class="material-icons-outlined text-xs">close</span> Clear image
+            </button>
+        </div>
+
+        <!-- Motion Prompt -->
+        <div class="bg-surface rounded-xl border border-gray-800 p-4">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide">Motion Prompt</h2>
+                <div class="flex gap-1">
+                    <button onclick="enhancePrompt()" class="text-xs text-primary hover:text-primary-hover flex items-center gap-1" title="Auto-enhance with cinematography keywords">
+                        <span class="material-icons-outlined text-sm">auto_fix_high</span>
+                        Enhance
+                    </button>
+                    <button onclick="document.getElementById('ltxPromptGuide').classList.remove('hidden')" class="text-xs text-gray-500 hover:text-gray-400 flex items-center gap-1" title="View LTX-2 prompting guide">
+                        <span class="material-icons-outlined text-sm">menu_book</span>
+                        Guide
+                    </button>
+                </div>
+            </div>
+            <textarea id="promptInput" rows="4" placeholder="Describe the motion you want to see... e.g., 'Woman winking at camera, breeze blowing hair, cinematic close-up, shallow depth of field'"
+                class="w-full bg-surface-2 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-primary resize-none"></textarea>
+            <div class="mt-2">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="text-xs text-gray-500">Negative Prompt</span>
+                    <button onclick="toggleNegPrompt()" class="text-xs text-gray-500 hover:text-gray-400" id="negToggle">Show</button>
+                </div>
+                <textarea id="negPromptInput" rows="2" style="display:none"
+                    class="w-full bg-surface-2 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-primary resize-none"
+                    placeholder="What to avoid...">色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画面杂乱，变形的</textarea>
+            </div>
+        </div>
+
+        <!-- Resolution & Frames (Local ComfyUI only) -->
+        <div id="localResolutionSection" class="bg-surface rounded-xl border border-gray-800 p-4">
+            <div class="flex gap-3">
+                <div class="flex-1">
+                    <label class="text-xs text-gray-500">Width</label>
+                    <select id="widthSelect"
+                        class="w-full bg-surface-2 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                        <option value="832" selected>832</option>
+                        <option value="768">768</option>
+                        <option value="640">640</option>
+                        <option value="512">512</option>
+                    </select>
+                </div>
+                <div class="flex-1">
+                    <label class="text-xs text-gray-500">Height</label>
+                    <select id="heightSelect"
+                        class="w-full bg-surface-2 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                        <option value="480" selected>480</option>
+                        <option value="432">432</option>
+                        <option value="360">360</option>
+                        <option value="288">288</option>
+                    </select>
+                </div>
+                <div class="flex-1">
+                    <label class="text-xs text-gray-500">Frames</label>
+                    <input type="number" id="framesInput" value="81" min="1" max="200" step="4"
+                        class="w-full bg-surface-2 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                </div>
+            </div>
+        </div>
+
+        <!-- Generation Settings (Local ComfyUI only) -->
+        <div id="localSettingsSection" class="bg-surface rounded-xl border border-gray-800 p-4">
+            <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-3">Settings</h2>
+
+            <div class="space-y-3">
+                <!-- Model -->
+                <div class="flex items-center justify-between">
+                    <label class="text-xs text-gray-400">Model (GGUF)</label>
+                    <select id="modelSelect"
+                        class="bg-surface-2 border border-gray-700 rounded-lg px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-primary max-w-[220px]">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+
+                <!-- Seed -->
+                <div class="flex items-center justify-between">
+                    <label class="text-xs text-gray-400">Seed</label>
+                    <div class="flex items-center gap-2">
+                        <input type="number" id="seedInput" value="-1" min="-1"
+                            class="w-28 bg-surface-2 border border-gray-700 rounded-lg px-2 py-1 text-sm text-gray-200 text-right focus:outline-none focus:border-primary">
+                        <button onclick="randomSeed()" class="text-gray-400 hover:text-primary" title="Random seed">
+                            <span class="material-icons-outlined text-sm">casino</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Steps -->
+                <div>
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="text-xs text-gray-400">Steps</label>
+                        <span class="text-xs text-gray-500" id="stepsValue">20</span>
+                    </div>
+                    <input type="range" id="stepsSlider" min="4" max="50" value="20"
+                        oninput="document.getElementById('stepsValue').textContent=this.value"
+                        class="w-full accent-primary">
+                </div>
+
+                <!-- CFG -->
+                <div>
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="text-xs text-gray-400">CFG Scale</label>
+                        <span class="text-xs text-gray-500" id="cfgValue">6.0</span>
+                    </div>
+                    <input type="range" id="cfgSlider" min="1" max="12" step="0.5" value="6"
+                        oninput="document.getElementById('cfgValue').textContent=parseFloat(this.value).toFixed(1)"
+                        class="w-full accent-primary">
+                </div>
+
+                <!-- Sampler -->
+                <div class="flex items-center justify-between">
+                    <label class="text-xs text-gray-400">Sampler</label>
+                    <select id="samplerSelect"
+                        class="bg-surface-2 border border-gray-700 rounded-lg px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                        <option value="uni_pc" selected>UniPC</option>
+                        <option value="uni_pc_bh2">UniPC BH2</option>
+                        <option value="euler">Euler</option>
+                        <option value="euler_ancestral">Euler Ancestral</option>
+                        <option value="dpmpp_2m">DPM++ 2M</option>
+                        <option value="dpmpp_2m_sde">DPM++ 2M SDE</option>
+                        <option value="dpmpp_2s_ancestral">DPM++ 2S Ancestral</option>
+                        <option value="dpmpp_sde">DPM++ SDE</option>
+                        <option value="heun">Heun</option>
+                        <option value="ddim">DDIM</option>
+                    </select>
+                </div>
+
+                <!-- Scheduler -->
+                <div class="flex items-center justify-between">
+                    <label class="text-xs text-gray-400">Scheduler</label>
+                    <select id="schedulerSelect"
+                        class="bg-surface-2 border border-gray-700 rounded-lg px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                        <option value="simple" selected>Simple</option>
+                        <option value="normal">Normal</option>
+                        <option value="karras">Karras</option>
+                        <option value="exponential">Exponential</option>
+                        <option value="sgm_uniform">SGM Uniform</option>
+                    </select>
+                </div>
+
+                <!-- Sampling Shift -->
+                <div>
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="text-xs text-gray-400">Sampling Shift</label>
+                        <span class="text-xs text-gray-500" id="shiftValue">8</span>
+                    </div>
+                    <input type="range" id="shiftSlider" min="1" max="20" step="0.5" value="8"
+                        oninput="document.getElementById('shiftValue').textContent=parseFloat(this.value).toFixed(1)"
+                        class="w-full accent-primary">
+                </div>
+
+                <!-- FPS -->
+                <div class="flex items-center justify-between">
+                    <label class="text-xs text-gray-400">Output FPS</label>
+                    <select id="fpsSelect"
+                        class="bg-surface-2 border border-gray-700 rounded-lg px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                        <option value="8">8 fps</option>
+                        <option value="12">12 fps</option>
+                        <option value="16" selected>16 fps</option>
+                        <option value="24">24 fps</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Generation Mode -->
+        <div class="bg-surface rounded-xl border border-gray-800 p-4">
+            <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-3">Generation Mode</h2>
+            <div class="flex gap-2 mb-3">
+                <button onclick="setGenMode('local')" id="modeLocal" class="flex-1 py-2 px-3 rounded-lg border border-primary bg-primary/20 text-primary text-sm font-medium">Local (Wan2.1)</button>
+                <button onclick="setGenMode('ovi')" id="modeOvi" class="flex-1 py-2 px-3 rounded-lg border border-gray-700 bg-surface-2 text-gray-400 text-sm">OVI (Video+Audio)</button>
+                <button onclick="setGenMode('together')" id="modeTogether" class="flex-1 py-2 px-3 rounded-lg border border-gray-700 bg-surface-2 text-gray-400 text-sm">Together.ai</button>
+                <button onclick="setGenMode('minimax')" id="modeMinimax" class="flex-1 py-2 px-3 rounded-lg border border-gray-700 bg-surface-2 text-gray-400 text-sm">MiniMax</button>
+            </div>
+            
+            <!-- OVI Options (hidden by default) -->
+            <div id="oviOptions" class="hidden space-y-3">
+                <div class="text-xs text-gray-500">
+                    <p><strong>OVI (Character.AI)</strong> - Video + Audio together!</p>
+                    <p>Generates synchronized video with speech and lip-sync.</p>
+                    <p class="mt-1 text-primary">First run: Downloads ~11 GB model (one time)</p>
+                </div>
+            </div>
+            
+            <!-- Together.ai Options (hidden by default) -->
+            <div id="togetherOptions" class="hidden space-y-3">
+                <div class="text-xs text-gray-500">
+                    <p><strong>Together.ai Video</strong> - Fast cloud generation (~2 min)</p>
+                    <p>Uses your Together.ai credits. Better facial animation.</p>
+                </div>
+            </div>
+
+            <!-- MiniMax Options (hidden by default) -->
+            <div id="minimaxOptions" class="hidden space-y-3">
+                <div class="text-xs text-gray-500">
+                    <p><strong>MiniMax Hailuo 2.3</strong> - High-quality video generation</p>
+                    <p>Text-to-Video or Image-to-Video. Camera movement controls.</p>
+                </div>
+
+                <!-- Model Selection -->
+                <div>
+                    <label class="text-xs text-gray-400">Model</label>
+                    <select id="minimaxModel"
+                        class="w-full bg-surface-2 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                        <option value="MiniMax-Hailuo-2.3" selected>MiniMax-Hailuo-2.3 (Best)</option>
+                        <option value="MiniMax-Hailuo-02">MiniMax-Hailuo-02</option>
+                        <option value="T2V-01-Director">T2V-01-Director</option>
+                        <option value="T2V-01">T2V-01</option>
+                    </select>
+                </div>
+
+                <!-- Duration -->
+                <div>
+                    <label class="text-xs text-gray-400">Duration</label>
+                    <select id="minimaxDuration"
+                        class="w-full bg-surface-2 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                        <option value="6" selected>6 seconds</option>
+                        <option value="10">10 seconds (768P only)</option>
+                    </select>
+                </div>
+
+                <!-- Resolution -->
+                <div>
+                    <label class="text-xs text-gray-400">Resolution</label>
+                    <select id="minimaxResolution"
+                        class="w-full bg-surface-2 border border-gray-700 rounded-lg px-2 py-1.5 text-sm text-gray-200 focus:outline-none focus:border-primary">
+                        <option value="768P" selected>768P (Default)</option>
+                        <option value="1080P">1080P (Hailuo 2.3, 6s only)</option>
+                        <option value="720P">720P (T2V-01 models)</option>
+                    </select>
+                </div>
+
+                <!-- Prompt Optimizer Toggle -->
+                <div class="flex items-center justify-between">
+                    <label class="text-xs text-gray-400">Prompt Optimizer</label>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="minimaxPromptOptimizer" checked class="sr-only peer">
+                        <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                    </label>
+                </div>
+
+                <!-- I2V indicator -->
+                <div id="minimaxI2VHint" class="hidden text-xs text-primary">
+                    <span class="material-icons-outlined text-xs align-middle">photo_camera</span>
+                    Image-to-Video mode — uploaded reference will be used as first frame
+                </div>
+            </div>
+        </div>
+
+        <!-- Generate Button -->
+        <button onclick="generate()" id="generateBtn"
+            class="w-full bg-primary hover:bg-primary-hover text-white font-semibold py-3.5 rounded-xl flex items-center justify-center gap-2 transition-all active:scale-[0.98] shadow-lg shadow-primary/20">
+            <span class="material-icons-outlined">videocam</span>
+            <span id="genBtnText">Generate Video</span>
+        </button>
+
+        <!-- Progress -->
+        <div id="progressInfo" class="hidden bg-surface rounded-xl border border-gray-800 p-4">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-sm text-gray-400" id="progressLabel">Queued...</span>
+                <span class="text-sm text-gray-300" id="progressPct"></span>
+            </div>
+            <div class="w-full bg-surface-3 rounded-full h-2 overflow-hidden">
+                <div id="progressBar" class="bg-primary h-full rounded-full transition-all duration-300" style="width:0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right Panel: Preview & History -->
+    <div class="flex-1 flex flex-col gap-5 min-w-0">
+
+        <!-- Main Preview -->
+        <div id="previewArea" class="flex-1 bg-surface rounded-xl border border-gray-800 flex items-center justify-center overflow-hidden relative" style="min-height: 500px;">
+            <!-- Empty state -->
+            <div id="emptyState" class="text-center">
+                <span class="material-icons-outlined text-6xl text-gray-700">movie</span>
+                <p class="text-gray-600 mt-3 text-sm">Upload a reference image and click Generate</p>
+                <p class="text-gray-700 text-xs mt-1">Wan2.1 I2V &middot; GGUF Quantized</p>
+            </div>
+
+            <!-- Generating state -->
+            <div id="generatingState" class="hidden text-center">
+                <div class="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div>
+                <p class="text-gray-400 mt-4 text-sm" id="genStatusText">Generating...</p>
+                <p class="text-gray-600 text-xs mt-1" id="genProgressText"></p>
+            </div>
+
+            <!-- Video display -->
+            <video id="previewVideo" class="hidden max-w-full max-h-full object-contain" controls loop autoplay muted></video>
+
+            <!-- Image display (for extracted frames) -->
+            <img id="previewImage" class="hidden max-w-full max-h-full object-contain" alt="Frame"/>
+        </div>
+
+        <!-- Video Actions Bar -->
+        <div id="videoActions" class="hidden flex gap-2">
+            <button onclick="downloadVideo()" class="flex items-center gap-1.5 px-4 py-2 bg-surface-2 hover:bg-surface-3 border border-gray-700 rounded-lg text-sm transition-colors">
+                <span class="material-icons-outlined text-sm">download</span>
+                Download
+            </button>
+            <button onclick="reuseSeed()" class="flex items-center gap-1.5 px-4 py-2 bg-surface-2 hover:bg-surface-3 border border-gray-700 rounded-lg text-sm transition-colors">
+                <span class="material-icons-outlined text-sm">casino</span>
+                Reuse Seed
+            </button>
+            <button onclick="extractLastFrame()" class="flex items-center gap-1.5 px-4 py-2 bg-surface-2 hover:bg-surface-3 border border-gray-700 rounded-lg text-sm transition-colors" title="Extract last frame and set as new reference for clip chaining">
+                <span class="material-icons-outlined text-sm">last_frame</span>
+                Extract Last Frame
+            </button>
+            <button onclick="uploadToCloudinary()" class="flex items-center gap-1.5 px-4 py-2 bg-surface-2 hover:bg-surface-3 border border-gray-700 rounded-lg text-sm transition-colors" title="Upload video to Cloudinary">
+                <span class="material-icons-outlined text-sm">cloud_upload</span>
+                Upload to Cloud
+            </button>
+            <div class="flex-1"></div>
+            <span class="text-xs text-gray-600 self-center" id="genMeta"></span>
+        </div>
+
+        <!-- History Strip -->
+        <div class="bg-surface rounded-xl border border-gray-800 p-4">
+            <div class="flex items-center justify-between mb-3">
+                <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wide">History</h2>
+                <button onclick="clearHistory()" class="text-xs text-gray-500 hover:text-gray-400">Clear</button>
+            </div>
+            <div id="historyStrip" class="flex gap-3 overflow-x-auto scrollbar-thin pb-1">
+                <div class="text-xs text-gray-600 py-6 text-center w-full">Generated videos will appear here</div>
+            </div>
+        </div>
+    </div>
+</main>
+
+<script>
+// Cache-bust: reload on any change
+// ============================================================
+// Config
+// ============================================================
+const COMFYUI_URL = '/api';
+
+// State
+let currentPromptId = null;
+let lastVideoUrl = null;
+let lastSeed = null;
+let uploadedImageName = null;
+let history = [];
+let isGenerating = false;
+
+// ============================================================
+// Init
+// ============================================================
+window.addEventListener('DOMContentLoaded', () => {
+    checkServer();
+    loadModels();
+    
+    // Load history from localStorage
+    const savedHistory = localStorage.getItem('videoforge_history');
+    if (savedHistory) {
+        try {
+            history = JSON.parse(savedHistory);
+            renderHistory();
+        } catch(e) {
+            console.error('Failed to load history:', e);
+        }
+    }
+});
+
+// ============================================================
+// Server Check
+// ============================================================
+async function checkServer() {
+    const statusEl = document.getElementById('serverStatus');
+    try {
+        const resp = await fetch(`${COMFYUI_URL}/system_stats`);
+        if (resp.ok) {
+            const data = await resp.json();
+            const gpu = data.devices?.[0];
+            const vramFree = gpu ? (gpu.vram_free / 1024 / 1024 / 1024).toFixed(1) : '?';
+            const vramTotal = gpu ? (gpu.vram_total / 1024 / 1024 / 1024).toFixed(1) : '?';
+            statusEl.innerHTML = `
+                <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                <span class="text-green-400 text-sm">${gpu?.name || 'Connected'} &mdash; ${vramFree}GB / ${vramTotal}GB</span>
+            `;
+        }
+    } catch(e) {
+        statusEl.innerHTML = `
+            <span class="w-2 h-2 rounded-full bg-red-500"></span>
+            <span class="text-red-400 text-sm">Server offline</span>
+        `;
+    }
+}
+
+// ============================================================
+// Model Loading (auto-populate from object_info)
+// ============================================================
+async function loadModels() {
+    try {
+        const resp = await fetch(`${COMFYUI_URL}/object_info/UnetLoaderGGUF`);
+        if (resp.ok) {
+            const data = await resp.json();
+            const info = data.UnetLoaderGGUF;
+            const models = info?.input?.required?.unet_name?.[0] || [];
+            const select = document.getElementById('modelSelect');
+            select.innerHTML = '';
+            if (models.length === 0) {
+                select.innerHTML = '<option value="">No GGUF models found</option>';
+                return;
+            }
+            models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m;
+                opt.textContent = m;
+                // Select wan2.1 i2v models by default
+                if (m.toLowerCase().includes('wan2.1') && m.toLowerCase().includes('i2v')) {
+                    opt.selected = true;
+                }
+                select.appendChild(opt);
+            });
+            // Fallback: select first if none matched
+            if (!select.value && models.length > 0) {
+                select.value = models[0];
+            }
+        }
+    } catch(e) {
+        console.warn('Could not load model list:', e);
+        document.getElementById('modelSelect').innerHTML = '<option value="">Error loading models</option>';
+    }
+}
+
+// ============================================================
+// Image Upload
+// ============================================================
+function handleDrop(e) {
+    e.preventDefault();
+    e.currentTarget.classList.remove('dragover');
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) {
+        handleImageUpload(file);
+    }
+}
+
+async function handleImageUpload(file) {
+    if (!file) return;
+
+    // Show preview immediately
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        document.getElementById('refThumb').src = e.target.result;
+        document.getElementById('uploadPlaceholder').classList.add('hidden');
+        document.getElementById('uploadPreview').classList.remove('hidden');
+        document.getElementById('clearRefBtn').classList.remove('hidden');
+        document.getElementById('refFileName').textContent = file.name;
+    };
+    reader.readAsDataURL(file);
+
+    // Upload to ComfyUI
+    const formData = new FormData();
+    formData.append('image', file);
+    formData.append('overwrite', 'true');
+
+    try {
+        const resp = await fetch(`${COMFYUI_URL}/upload/image`, {
+            method: 'POST',
+            body: formData
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            uploadedImageName = data.name;
+        } else {
+            alert('Failed to upload image to ComfyUI');
+        }
+    } catch(e) {
+        alert('Upload error: ' + e.message);
+    }
+}
+
+function clearRefImage() {
+    uploadedImageName = null;
+    document.getElementById('uploadPlaceholder').classList.remove('hidden');
+    document.getElementById('uploadPreview').classList.add('hidden');
+    document.getElementById('clearRefBtn').classList.add('hidden');
+    document.getElementById('imageUpload').value = '';
+}
+
+// ============================================================
+// UI Helpers
+// ============================================================
+function toggleNegPrompt() {
+    const el = document.getElementById('negPromptInput');
+    const btn = document.getElementById('negToggle');
+    if (el.style.display === 'none') {
+        el.style.display = 'block';
+        btn.textContent = 'Hide';
+    } else {
+        el.style.display = 'none';
+        btn.textContent = 'Show';
+    }
+}
+
+function randomSeed() {
+    document.getElementById('seedInput').value = Math.floor(Math.random() * 2147483647);
+}
+
+// ============================================================
+// LTX-2 Prompt Enhancer
+// Based on official LTX-2 prompting guide
+// ============================================================
+const LTX_ENHANCEMENTS = {
+    cinematography: [
+        'cinematic close-up', 'medium shot', 'wide establishing shot',
+        'shallow depth of field', 'film grain', 'golden hour lighting',
+        'dramatic shadows', 'soft natural lighting', 'neon glow'
+    ],
+    cameraMovement: [
+        'slow camera pan', 'gentle dolly in', 'handheld tracking shot',
+        'subtle camera push', 'static frame', 'smooth tracking shot'
+    ],
+    atmosphere: [
+        'atmospheric particles', 'soft mist', 'warm ambient light',
+        'subtle motion blur', 'natural atmosphere', 'cinematic atmosphere'
+    ],
+    style: [
+        'photorealistic', 'cinematic quality', 'professional cinematography',
+        'film-quality', 'high production value', 'natural motion'
+    ]
+};
+
+function enhancePrompt() {
+    const input = document.getElementById('promptInput');
+    let prompt = input.value.trim();
+    
+    if (!prompt) {
+        alert('Please enter a prompt first, then click Enhance');
+        return;
+    }
+    
+    // Check if prompt already has enhancement keywords
+    const hasCinema = /cinematic|close.?up|medium.?shot|wide.?shot|depth.?of.?field|film.?grain|golden.?hour/i.test(prompt);
+    const hasCamera = /pan|dolly|track|zoom|handheld|static|camera/i.test(prompt);
+    const hasAtmosphere = /atmospheric|mist|particles|motion.?blur|ambient|lighting/i.test(prompt);
+    
+    // Add missing elements based on LTX-2 guide
+    let additions = [];
+    
+    if (!hasCinema) {
+        additions.push(LTX_ENHANCEMENTS.cinematography[Math.floor(Math.random() * LTX_ENHANCEMENTS.cinematography.length)]);
+    }
+    if (!hasCamera && prompt.length > 30) {
+        additions.push(LTX_ENHANCEMENTS.cameraMovement[Math.floor(Math.random() * LTX_ENHANCEMENTS.cameraMovement.length)]);
+    }
+    if (!hasAtmosphere) {
+        additions.push(LTX_ENHANCEMENTS.atmosphere[Math.floor(Math.random() * LTX_ENHANCEMENTS.atmosphere.length)]);
+    }
+    
+    // Always add style if not present
+    if (!/photorealistic|cinematic|film.?quality|professional/i.test(prompt)) {
+        additions.push(LTX_ENHANCEMENTS.style[0]);
+    }
+    
+    if (additions.length > 0) {
+        // Add enhancements as a flowing continuation
+        const enhanced = prompt + ', ' + additions.join(', ');
+        input.value = enhanced;
+        
+        // Show feedback
+        const btn = event.target.closest('button');
+        const originalText = btn.innerHTML;
+        btn.innerHTML = '<span class="material-icons-outlined text-sm">check</span> Enhanced!';
+        btn.classList.add('text-green-400');
+        setTimeout(() => {
+            btn.innerHTML = originalText;
+            btn.classList.remove('text-green-400');
+        }, 2000);
+    } else {
+        alert('Your prompt already looks great! It has good cinematography, camera movement, and atmosphere keywords.');
+    }
+}
+
+// ============================================================
+// Workflow Builder
+// Builds the Wan2.1 I2V workflow matching the reference JSON
+// Node IDs match the original workflow for clarity:
+//   37: UnetLoaderGGUF
+//   38: CLIPLoader (type=wan)
+//   39: VAELoader
+//   49: CLIPVisionLoader
+//   51: CLIPVisionEncode
+//   52: LoadImage
+//   50: WanImageToVideo
+//   54: ModelSamplingSD3
+//    6: CLIPTextEncode (positive)
+//    7: CLIPTextEncode (negative)
+//    3: KSampler
+//    8: VAEDecode
+//   28: SaveAnimatedWEBP
+// ============================================================
+function buildWorkflow() {
+    const prompt = document.getElementById('promptInput').value.trim();
+    if (!prompt) return null;
+    if (!uploadedImageName) return null;
+
+    const negPrompt = document.getElementById('negPromptInput').value.trim() || '';
+    const width = parseInt(document.getElementById('widthSelect').value) || 832;
+    const height = parseInt(document.getElementById('heightSelect').value) || 480;
+    const frames = parseInt(document.getElementById('framesInput').value) || 81;
+    const seedVal = parseInt(document.getElementById('seedInput').value);
+    const seed = seedVal === -1 ? Math.floor(Math.random() * 2147483647) : seedVal;
+    const steps = parseInt(document.getElementById('stepsSlider').value);
+    const cfg = parseFloat(document.getElementById('cfgSlider').value);
+    const sampler = document.getElementById('samplerSelect').value;
+    const scheduler = document.getElementById('schedulerSelect').value;
+    const shift = parseFloat(document.getElementById('shiftSlider').value);
+    const fps = parseInt(document.getElementById('fpsSelect').value);
+    const modelName = document.getElementById('modelSelect').value;
+
+    lastSeed = seed;
+
+    const workflow = {};
+
+    // Node 37: UnetLoaderGGUF
+    workflow["37"] = {
+        "class_type": "UnetLoaderGGUF",
+        "inputs": {
+            "unet_name": modelName
+        }
+    };
+
+    // Node 38: CLIPLoader (type=wan)
+    workflow["38"] = {
+        "class_type": "CLIPLoader",
+        "inputs": {
+            "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+            "type": "wan"
+        }
+    };
+
+    // Node 39: VAELoader
+    workflow["39"] = {
+        "class_type": "VAELoader",
+        "inputs": {
+            "vae_name": "wan_2.1_vae.safetensors"
+        }
+    };
+
+    // Node 49: CLIPVisionLoader
+    workflow["49"] = {
+        "class_type": "CLIPVisionLoader",
+        "inputs": {
+            "clip_name": "clip_vision_h.safetensors"
+        }
+    };
+
+    // Node 52: LoadImage
+    workflow["52"] = {
+        "class_type": "LoadImage",
+        "inputs": {
+            "image": uploadedImageName,
+            "upload": "image"
+        }
+    };
+
+    // Node 51: CLIPVisionEncode
+    // Inputs: clip_vision from [49], image from [52]
+    workflow["51"] = {
+        "class_type": "CLIPVisionEncode",
+        "inputs": {
+            "clip_vision": ["49", 0],
+            "image": ["52", 0],
+            "crop": "none"
+        }
+    };
+
+    // Node 6: CLIPTextEncode (positive)
+    workflow["6"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+            "clip": ["38", 0],
+            "text": prompt
+        }
+    };
+
+    // Node 7: CLIPTextEncode (negative)
+    workflow["7"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {
+            "clip": ["38", 0],
+            "text": negPrompt
+        }
+    };
+
+    // Node 50: WanImageToVideo
+    // Inputs: positive from [6], negative from [7], vae from [39],
+    //         clip_vision_output from [51], start_image from [52]
+    workflow["50"] = {
+        "class_type": "WanImageToVideo",
+        "inputs": {
+            "positive": ["6", 0],
+            "negative": ["7", 0],
+            "vae": ["39", 0],
+            "clip_vision_output": ["51", 0],
+            "start_image": ["52", 0],
+            "width": width,
+            "height": height,
+            "length": frames,
+            "batch_size": 1
+        }
+    };
+
+    // Node 54: ModelSamplingSD3
+    workflow["54"] = {
+        "class_type": "ModelSamplingSD3",
+        "inputs": {
+            "model": ["37", 0],
+            "shift": shift
+        }
+    };
+
+    // Node 3: KSampler
+    workflow["3"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["54", 0],
+            "positive": ["50", 0],
+            "negative": ["50", 1],
+            "latent_image": ["50", 2],
+            "seed": seed,
+            "steps": steps,
+            "cfg": cfg,
+            "sampler_name": sampler,
+            "scheduler": scheduler,
+            "denoise": 1.0
+        }
+    };
+
+    // Node 8: VAEDecode
+    workflow["8"] = {
+        "class_type": "VAEDecode",
+        "inputs": {
+            "samples": ["3", 0],
+            "vae": ["39", 0]
+        }
+    };
+
+    // Node 28: VHS_VideoCombine (MP4 output)
+    workflow["28"] = {
+        "class_type": "VHS_VideoCombine",
+        "inputs": {
+            "images": ["8", 0],
+            "frame_rate": fps,
+            "loop_count": 0,
+            "filename_prefix": "videoforge",
+            "format": "video/h264-mp4",
+            "pix_fmt": "yuv420p",
+            "crf": 23,
+            "save_metadata": false,
+            "pingpong": false,
+            "save_output": true
+        }
+    };
+
+    return workflow;
+}
+
+// ============================================================
+// Generation Mode Toggle
+// ============================================================
+let genMode = 'local'; // 'local' or 'together'
+
+function setGenMode(mode) {
+    genMode = mode;
+    const localBtn = document.getElementById('modeLocal');
+    const oviBtn = document.getElementById('modeOvi');
+    const cloudBtn = document.getElementById('modeTogether');
+    const minimaxBtn = document.getElementById('modeMinimax');
+    const oviOpts = document.getElementById('oviOptions');
+    const cloudOpts = document.getElementById('togetherOptions');
+    const minimaxOpts = document.getElementById('minimaxOptions');
+    const localSettings = document.getElementById('localSettingsSection');
+    const localResolution = document.getElementById('localResolutionSection');
+    const genBtnText = document.getElementById('genBtnText');
+    
+    // Reset all buttons
+    localBtn.className = 'flex-1 py-2 px-3 rounded-lg border border-gray-700 bg-surface-2 text-gray-400 text-sm';
+    oviBtn.className = 'flex-1 py-2 px-3 rounded-lg border border-gray-700 bg-surface-2 text-gray-400 text-sm';
+    cloudBtn.className = 'flex-1 py-2 px-3 rounded-lg border border-gray-700 bg-surface-2 text-gray-400 text-sm';
+    minimaxBtn.className = 'flex-1 py-2 px-3 rounded-lg border border-gray-700 bg-surface-2 text-gray-400 text-sm';
+    if (oviOpts) oviOpts.classList.add('hidden');
+    if (cloudOpts) cloudOpts.classList.add('hidden');
+    if (minimaxOpts) minimaxOpts.classList.add('hidden');
+    if (localSettings) localSettings.classList.add('hidden');
+    if (localResolution) localResolution.classList.add('hidden');
+    
+    if (mode === 'local') {
+        localBtn.className = 'flex-1 py-2 px-3 rounded-lg border border-primary bg-primary/20 text-primary text-sm font-medium';
+        genBtnText.textContent = 'Generate Video (Wan2.1)';
+        if (localSettings) localSettings.classList.remove('hidden');
+        if (localResolution) localResolution.classList.remove('hidden');
+    } else if (mode === 'ovi') {
+        oviBtn.className = 'flex-1 py-2 px-3 rounded-lg border border-primary bg-primary/20 text-primary text-sm font-medium';
+        oviOpts.classList.remove('hidden');
+        genBtnText.textContent = 'Generate Video+Audio (OVI)';
+    } else if (mode === 'together') {
+        cloudBtn.className = 'flex-1 py-2 px-3 rounded-lg border border-primary bg-primary/20 text-primary text-sm font-medium';
+        cloudOpts.classList.remove('hidden');
+        genBtnText.textContent = 'Generate Video (Together.ai)';
+    } else if (mode === 'minimax') {
+        minimaxBtn.className = 'flex-1 py-2 px-3 rounded-lg border border-primary bg-primary/20 text-primary text-sm font-medium';
+        minimaxOpts.classList.remove('hidden');
+        genBtnText.textContent = 'Generate Video (MiniMax)';
+        // Show I2V hint if reference image uploaded
+        updateMiniMaxI2VHint();
+    }
+}
+
+// ============================================================
+// OVI Video + Audio Generation
+// ============================================================
+async function generateOVI() {
+    const prompt = document.getElementById('promptInput').value.trim();
+    if (!prompt) {
+        alert('Please enter a prompt with speech tags like: <S>Hello!<E>');
+        return;
+    }
+    
+    const refThumb = document.getElementById('refThumb');
+    if (!refThumb || !refThumb.src) {
+        alert('Please upload a reference image');
+        return;
+    }
+    
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-icons-outlined animate-spin">progress_activity</span> Generating...';
+    isGenerating = true;
+    
+    showState('generating');
+    showProgress('Building OVI workflow...', 5);
+    
+    try {
+        // Get settings (OVI seed max is 1000000)
+        const seed = parseInt(document.getElementById('seedInput').value) || -1;
+        const actualSeed = seed === -1 ? Math.floor(Math.random() * 1000000) : (seed % 1000000);
+        
+        // Format prompt with speech tags if not already present
+        let oviPrompt = prompt;
+        if (!oviPrompt.includes('<S>') && !oviPrompt.includes('<E>')) {
+            oviPrompt = `<S>${oviPrompt}<E>`;
+        }
+        
+        // Build OVI workflow
+        const workflow = {
+            "1": {
+                "class_type": "OviEngineLoader",
+                "inputs": {
+                    "model_precision": "Ovi-11B-fp8.safetensors",
+                    "cpu_offload": true,
+                    "device": 0
+                }
+            },
+            "2": {
+                "class_type": "OviWanComponentLoader",
+                "inputs": {
+                    "engine": ["1", 0],
+                    "vae_file": "wan2.2_vae.safetensors",
+                    "umt5_file": "umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+                }
+            },
+            "3": {
+                "class_type": "LoadImage",
+                "inputs": {
+                    "image": uploadedImageName,
+                    "upload": "image"
+                }
+            },
+            "4": {
+                "class_type": "OviVideoGenerator",
+                "inputs": {
+                    "components": ["2", 0],
+                    "text_prompt": oviPrompt,
+                    "video_height": 512,
+                    "video_width": 512,
+                    "seed": actualSeed,
+                    "solver_name": "unipc",
+                    "sample_steps": 50,
+                    "shift": 5.0,
+                    "video_guidance_scale": 4.0,
+                    "audio_guidance_scale": 3.0,
+                    "slg_layer": 11,
+                    "video_negative_prompt": "",
+                    "audio_negative_prompt": "",
+                    "first_frame_image": ["3", 0]
+                }
+            },
+            "5": {
+                "class_type": "OviLatentDecoder",
+                "inputs": {
+                    "components": ["2", 0],
+                    "video_latents": ["4", 0],
+                    "audio_latents": ["4", 1]
+                }
+            },
+            "6": {
+                "class_type": "VHS_VideoCombine",
+                "inputs": {
+                    "images": ["5", 0],
+                    "audio": ["5", 1],
+                    "frame_rate": 24,
+                    "loop_count": 0,
+                    "filename_prefix": "videoforge_ovi",
+                    "format": "video/h264-mp4",
+                    "pix_fmt": "yuv420p",
+                    "crf": 23,
+                    "save_metadata": false,
+                    "pingpong": false,
+                    "save_output": true
+                }
+            }
+        };
+        
+        console.log('[OVI] Submitting workflow...');
+        showProgress('Submitting to ComfyUI...', 10);
+        
+        // Submit workflow
+        const resp = await fetch(`${COMFYUI_URL}/prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: workflow })
+        });
+        
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error?.message || JSON.stringify(err.node_errors) || 'Generation failed');
+        }
+        
+        const result = await resp.json();
+        currentPromptId = result.prompt_id;
+        
+        console.log('[OVI] Queued:', currentPromptId);
+        showProgress('Generating video+audio... (first run downloads 11GB model)', 15);
+        
+        // Poll for completion (OVI takes longer - up to 20 minutes)
+        pollForResult(currentPromptId, 1200);  // 20 minutes timeout
+        
+    } catch(e) {
+        console.error('OVI error:', e);
+        showState('empty');
+        hideProgress();
+        alert('OVI Error: ' + e.message);
+        resetBtn();
+    }
+}
+
+// ============================================================
+// LTX-2 Image-to-Video Generation
+// ============================================================
+async function generateLTX2() {
+    const prompt = document.getElementById('promptInput').value.trim();
+    if (!prompt) {
+        alert('Please enter a motion prompt');
+        return;
+    }
+    
+    const refThumb = document.getElementById('refThumb');
+    if (!refThumb || !refThumb.src) {
+        alert('Please upload a reference image');
+        return;
+    }
+    
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-icons-outlined animate-spin">progress_activity</span> Generating...';
+    isGenerating = true;
+    
+    showState('generating');
+    showProgress('Building LTX-2 workflow...', 5);
+    
+    try {
+        // Get settings (OVI seed max is 1000000)
+        const seed = parseInt(document.getElementById('seedInput').value) || -1;
+        const actualSeed = seed === -1 ? Math.floor(Math.random() * 1000000) : (seed % 1000000);
+        const steps = 30;
+        const cfg = 3.5;
+        const width = 768;
+        const height = 512;
+        const length = 121; // 5 seconds at 24fps
+        const strength = 0.8;
+        
+        // Build LTX-2 workflow (FIXED with T5 text encoder)
+        const workflow = {
+            "1": {
+                "class_type": "UnetLoaderGGUF",
+                "inputs": {
+                    "unet_name": "ltx-video-Q4_K_M.gguf",
+                    "model_type": "ltxv"
+                }
+            },
+            "2": {
+                "class_type": "VAELoader",
+                "inputs": {
+                    "vae_name": "ltx-2-19b-vae.safetensors"
+                }
+            },
+            "3": {
+                "class_type": "LoadImage",
+                "inputs": {
+                    "image": uploadedImageName,
+                    "upload": "image"
+                }
+            },
+            "4": {
+                "class_type": "LTXVPreprocess",
+                "inputs": {
+                    "image": ["3", 0],
+                    "img_compression": 1
+                }
+            },
+            "5": {
+                "class_type": "CLIPLoader",
+                "inputs": {
+                    "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
+                    "type": "wan"
+                }
+            },
+            "6": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {
+                    "clip": ["5", 0],
+                    "text": prompt
+                }
+            },
+            "7": {
+                "class_type": "CLIPTextEncode",
+                "inputs": {
+                    "clip": ["5", 0],
+                    "text": "low quality, blurry, distorted, artifacts, static"
+                }
+            },
+            "8": {
+                "class_type": "LTXVImgToVideo",
+                "inputs": {
+                    "positive": ["6", 0],
+                    "negative": ["7", 0],
+                    "vae": ["2", 0],
+                    "image": ["4", 0],
+                    "width": width,
+                    "height": height,
+                    "length": length,
+                    "batch_size": 1,
+                    "strength": strength
+                }
+            },
+            "9": {
+                "class_type": "LTXVConditioning",
+                "inputs": {
+                    "positive": ["8", 0],
+                    "negative": ["8", 1],
+                    "frame_rate": 24
+                }
+            },
+            "10": {
+                "class_type": "ModelSamplingLTXV",
+                "inputs": {
+                    "model": ["1", 0],
+                    "max_shift": 2.5,
+                    "base_shift": 0.5
+                }
+            },
+            "11": {
+                "class_type": "KSampler",
+                "inputs": {
+                    "seed": actualSeed,
+                    "steps": steps,
+                    "cfg": cfg,
+                    "sampler_name": "euler",
+                    "scheduler": "simple",
+                    "denoise": 1.0,
+                    "model": ["10", 0],
+                    "positive": ["9", 0],
+                    "negative": ["9", 1],
+                    "latent_image": ["8", 2]
+                }
+            },
+            "12": {
+                "class_type": "VAEDecode",
+                "inputs": {
+                    "samples": ["11", 0],
+                    "vae": ["2", 0]
+                }
+            },
+            "13": {
+                "class_type": "VHS_VideoCombine",
+                "inputs": {
+                    "images": ["12", 0],
+                    "frame_rate": 24,
+                    "loop_count": 0,
+                    "filename_prefix": "videoforge_ltx2",
+                    "format": "video/h264-mp4",
+                    "pix_fmt": "yuv420p",
+                    "crf": 23,
+                    "save_metadata": false,
+                    "pingpong": false,
+                    "save_output": true
+                }
+            }
+        };
+        
+        console.log('[LTX-2] Submitting workflow...');
+        showProgress('Submitting to ComfyUI...', 10);
+        
+        // Submit workflow
+        const resp = await fetch(`${COMFYUI_URL}/prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: workflow })
+        });
+        
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error?.message || JSON.stringify(err.node_errors) || 'Generation failed');
+        }
+        
+        const result = await resp.json();
+        currentPromptId = result.prompt_id;
+        
+        console.log('[LTX-2] Queued:', currentPromptId);
+        showProgress('Generating LTX-2 video...', 15);
+        
+        // Poll for completion
+        pollForResult(currentPromptId);
+        
+    } catch(e) {
+        console.error('LTX-2 error:', e);
+        showState('empty');
+        hideProgress();
+        alert('LTX-2 Error: ' + e.message);
+        resetBtn();
+    }
+}
+
+// ============================================================
+// Together.ai Bridge (via local Python service)
+// ============================================================
+// Use server IP so browser can reach the bridge
+const TOGETHER_BRIDGE_URL = 'http://192.168.1.3:9000';
+
+async function generateTogetherBridge() {
+    const prompt = document.getElementById('promptInput').value.trim();
+    if (!prompt) {
+        alert('Please enter a motion prompt');
+        return;
+    }
+    
+    const refThumb = document.getElementById('refThumb');
+    if (!refThumb || !refThumb.src) {
+        alert('Please upload a reference image');
+        return;
+    }
+    
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-icons-outlined animate-spin">progress_activity</span> Generating...';
+    isGenerating = true;
+    
+    showState('generating');
+    showProgress('Sending to Together.ai...', 10);
+    
+    try {
+        // Call local Together.ai bridge service
+        const resp = await fetch(`${TOGETHER_BRIDGE_URL}/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt: prompt,
+                image: refThumb.src
+            })
+        });
+        
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || 'Together.ai bridge error');
+        }
+        
+        const data = await resp.json();
+        const taskId = data.task_id;
+        
+        if (!taskId) {
+            throw new Error('No task_id in response');
+        }
+        
+        showProgress('Generating video...', 30);
+        
+        // Poll for completion
+        const maxWait = 300;
+        let waited = 0;
+        
+        while (waited < maxWait) {
+            await new Promise(r => setTimeout(r, 5000));
+            waited += 5;
+            
+            const statusResp = await fetch(`${TOGETHER_BRIDGE_URL}/status/${taskId}`);
+            const statusData = await statusResp.json();
+            const status = statusData.status;
+            const videoUrl = statusData.video_url;
+            
+            showProgress(`Generating... ${waited}s (${status})`, 30 + (waited / maxWait * 70));
+            
+            if (status === 'completed' && videoUrl) {
+                showProgress('Complete!', 100);
+                displayVideo(videoUrl);
+                addToHistory(videoUrl);
+                resetBtn();
+                return;
+            }
+            
+            if (status === 'failed') {
+                throw new Error(statusData.error || 'Video generation failed');
+            }
+        }
+        
+        throw new Error('Video generation timed out');
+        
+    } catch(e) {
+        console.error('Together.ai error:', e);
+        showState('empty');
+        hideProgress();
+        if (e.message.includes('ECONNREFUSED') || e.message.includes('Failed to fetch')) {
+            alert('Together.ai bridge service not running.\n\nStart it with:\npython3 /home/marc/videoforge/together_bridge.py\n\nOr use Local (Wan2.1) mode instead.');
+        } else {
+            alert('Together.ai Error: ' + e.message);
+        }
+        resetBtn();
+    }
+}
+
+// ============================================================
+// MiniMax Video Generation (T2V / I2V via backend proxy)
+// ============================================================
+function updateMiniMaxI2VHint() {
+    const hint = document.getElementById('minimaxI2VHint');
+    if (hint) {
+        const refThumb = document.getElementById('refThumb');
+        if (refThumb && refThumb.src && !refThumb.closest('.hidden')) {
+            hint.classList.remove('hidden');
+        } else {
+            hint.classList.add('hidden');
+        }
+    }
+}
+
+async function generateMiniMax() {
+    const prompt = document.getElementById('promptInput').value.trim();
+    if (!prompt) {
+        alert('Please enter a prompt describing the video');
+        return;
+    }
+
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-icons-outlined animate-spin">progress_activity</span> Generating...';
+    isGenerating = true;
+
+    showState('generating');
+    showProgress('Starting MiniMax generation...', 5);
+
+    try {
+        const model = document.getElementById('minimaxModel').value;
+        const duration = parseInt(document.getElementById('minimaxDuration').value);
+        const resolution = document.getElementById('minimaxResolution').value;
+        const promptOptimizer = document.getElementById('minimaxPromptOptimizer').checked;
+
+        // Build request body
+        const body = {
+            model: model,
+            prompt: prompt,
+            duration: duration,
+            resolution: resolution,
+            prompt_optimizer: promptOptimizer,
+        };
+
+        // If reference image is uploaded, use I2V mode
+        const refThumb = document.getElementById('refThumb');
+        if (refThumb && refThumb.src && !refThumb.closest('.hidden')) {
+            // Send data URL as first_frame_image
+            body.first_frame_image = refThumb.src;
+            console.log('[MiniMax] I2V mode with reference image');
+        }
+
+        console.log('[MiniMax] Creating video:', JSON.stringify({ ...body, first_frame_image: body.first_frame_image ? '(data URL)' : undefined }));
+        showProgress('Sending to MiniMax...', 10);
+
+        // Step 1: Create task
+        const resp = await fetch('/minimax/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error || `HTTP ${resp.status}: Generation failed`);
+        }
+
+        const data = await resp.json();
+        const taskId = data.task_id;
+        if (!taskId) {
+            throw new Error('No task_id in response');
+        }
+
+        console.log('[MiniMax] Task created:', taskId);
+        showProgress('Video generating...', 15);
+
+        // Step 2: Poll for completion
+        const maxWait = 600; // 10 minutes max
+        let waited = 0;
+
+        while (waited < maxWait) {
+            await new Promise(r => setTimeout(r, 5000));
+            waited += 5;
+
+            const statusResp = await fetch(`/minimax/status/${taskId}`);
+            const statusData = await statusResp.json();
+            const status = statusData.status;
+            const baseResp = statusData.base_resp || {};
+
+            console.log(`[MiniMax] Poll ${waited}s: status=${status}`, statusData);
+
+            showProgress(`Generating... ${waited}s (${status})`, 15 + (waited / maxWait * 70));
+
+            if (status === 'Success') {
+                const fileId = statusData.file_id;
+                if (!fileId) {
+                    throw new Error('Task succeeded but no file_id returned');
+                }
+
+                console.log('[MiniMax] Success, fetching download URL for file_id:', fileId);
+                showProgress('Fetching video...', 90);
+
+                // Step 3: Get download URL
+                const dlResp = await fetch(`/minimax/download/${fileId}`);
+                const dlData = await dlResp.json();
+                const dlFile = dlData.file || {};
+                const videoUrl = dlFile.download_url;
+
+                if (!videoUrl) {
+                    throw new Error('No download URL available');
+                }
+
+                console.log('[MiniMax] Video ready:', videoUrl);
+                showProgress('Complete!', 100);
+                displayVideo(videoUrl);
+                addToHistory(videoUrl);
+                resetBtn();
+                return;
+            }
+
+            if (status === 'Fail') {
+                throw new Error(baseResp.status_msg || 'Video generation failed');
+            }
+
+            // status is Preparing, Queueing, or Processing — continue polling
+        }
+
+        throw new Error('Video generation timed out after 10 minutes');
+
+    } catch(e) {
+        console.error('MiniMax error:', e);
+        showState('empty');
+        hideProgress();
+        alert('MiniMax Error: ' + e.message);
+        resetBtn();
+    }
+}
+
+// ============================================================
+// Generation (main entry point)
+// ============================================================
+async function generate() {
+    // Route to LTX-2 if selected
+    if (genMode === 'ltx') {
+        generateLTX2();
+        return;
+    }
+    
+    // Route to OVI if selected
+    if (genMode === 'ovi') {
+        generateOVI();
+        return;
+    }
+    
+    // Route to Together.ai bridge if selected
+    if (genMode === 'together') {
+        generateTogetherBridge();
+        return;
+    }
+    
+    // Route to MiniMax if selected
+    if (genMode === 'minimax') {
+        generateMiniMax();
+        return;
+    }
+    
+    // Local generation
+    if (!uploadedImageName) {
+        alert('Please upload a reference image first');
+        return;
+    }
+
+    const prompt = document.getElementById('promptInput').value.trim();
+    if (!prompt) {
+        alert('Please enter a motion prompt');
+        return;
+    }
+
+    const workflow = buildWorkflow();
+    if (!workflow) {
+        alert('Missing required parameters');
+        return;
+    }
+
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="material-icons-outlined animate-spin">progress_activity</span> Generating...';
+    isGenerating = true;
+
+    showState('generating');
+    showProgress('Queued...', 0);
+
+    try {
+        // Submit prompt
+        const resp = await fetch(`${COMFYUI_URL}/prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: workflow })
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.error?.message || JSON.stringify(err.node_errors) || 'Generation failed');
+        }
+
+        const result = await resp.json();
+        currentPromptId = result.prompt_id;
+
+        document.getElementById('genStatusText').textContent = 'Queued...';
+        showProgress('Queued...', 5);
+
+        // Poll for completion
+        pollForResult(currentPromptId);
+    } catch(e) {
+        console.error('Generation error:', e);
+        showState('empty');
+        hideProgress();
+        alert('Error: ' + e.message);
+        resetBtn();
+    }
+}
+
+async function pollForResult(promptId, maxWaitSeconds = 1800) {
+    const maxWait = maxWaitSeconds; // Timeout in seconds (default 30 min)
+    let waited = 0;
+
+    const poll = async () => {
+        try {
+            const resp = await fetch(`${COMFYUI_URL}/history/${promptId}`);
+            const hist = await resp.json();
+
+            if (hist[promptId]) {
+                const outputs = hist[promptId].outputs || {};
+
+                // Check for outputs in any node (VHS_VideoCombine outputs MP4)
+                for (const [nodeId, nodeOutput] of Object.entries(outputs)) {
+                    // Check for video (MP4) from VHS_VideoCombine
+                    if (nodeOutput.videos && nodeOutput.videos.length > 0) {
+                        for (const vid of nodeOutput.videos) {
+                            const vidUrl = `${COMFYUI_URL}/view?filename=${encodeURIComponent(vid.filename)}&subfolder=${encodeURIComponent(vid.subfolder || '')}&type=${encodeURIComponent(vid.type || 'output')}`;
+                            displayVideo(vidUrl);
+                            addToHistory(vidUrl);
+                        }
+                        return;
+                    }
+                    // Fallback: check for gifs (animated WEBP) or images
+                    if (nodeOutput.gifs && nodeOutput.gifs.length > 0) {
+                        for (const gif of nodeOutput.gifs) {
+                            const vidUrl = `${COMFYUI_URL}/view?filename=${encodeURIComponent(gif.filename)}&subfolder=${encodeURIComponent(gif.subfolder || '')}&type=${encodeURIComponent(gif.type || 'output')}`;
+                            displayVideo(vidUrl);
+                            addToHistory(vidUrl);
+                        }
+                        return;
+                    }
+                    if (nodeOutput.images && nodeOutput.images.length > 0) {
+                        for (const img of nodeOutput.images) {
+                            const vidUrl = `${COMFYUI_URL}/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder || '')}&type=${encodeURIComponent(img.type || 'output')}`;
+                            displayVideo(vidUrl);
+                            addToHistory(vidUrl);
+                        }
+                        return;
+                    }
+                }
+
+                // Check for errors
+                if (hist[promptId].status?.status_str === 'error') {
+                    throw new Error('Generation failed on server');
+                }
+            }
+
+            waited++;
+            if (waited > maxWait) {
+                throw new Error('Generation timed out');
+            }
+
+            // Rough progress estimation (video gen is slow)
+            const pct = Math.min(90, Math.round((waited / 120) * 100));
+            document.getElementById('genStatusText').textContent = `Generating... (${waited}s)`;
+            showProgress(`Generating... (${waited}s)`, pct);
+
+            setTimeout(poll, 1000);
+        } catch(e) {
+            if (e.message.includes('timed out') || e.message.includes('failed')) {
+                showState('empty');
+                hideProgress();
+                alert('Error: ' + e.message);
+                resetBtn();
+            } else {
+                // Network error, retry
+                waited++;
+                if (waited > maxWait) {
+                    showState('empty');
+                    hideProgress();
+                    alert('Connection lost');
+                    resetBtn();
+                } else {
+                    setTimeout(poll, 2000);
+                }
+            }
+        }
+    };
+
+    setTimeout(poll, 1000);
+}
+
+// ============================================================
+// Also poll /prompt for progress percentage
+// ============================================================
+async function pollProgress() {
+    if (!isGenerating) return;
+    try {
+        const resp = await fetch(`${COMFYUI_URL}/prompt`);
+        if (resp.ok) {
+            const data = await resp.json();
+            // Check if our prompt is executing
+            const execInfo = data.exec_info;
+            if (execInfo) {
+                const queueRemaining = execInfo.queue_remaining;
+                if (queueRemaining !== undefined && queueRemaining === 0 && !currentPromptId) {
+                    // nothing running
+                }
+            }
+        }
+    } catch(e) {}
+    if (isGenerating) setTimeout(pollProgress, 2000);
+}
+
+function displayVideo(url) {
+    lastVideoUrl = url;
+    const video = document.getElementById('previewVideo');
+    video.src = url;
+    video.onloadeddata = () => {
+        showState('video');
+        hideProgress();
+        resetBtn();
+        document.getElementById('genMeta').textContent =
+            `Seed: ${lastSeed} | ${document.getElementById('stepsSlider').value} steps | ${document.getElementById('samplerSelect').value} | ${document.getElementById('framesInput').value} frames`;
+    };
+    video.onerror = () => {
+        // Fallback: might be an image not a video
+        const img = document.getElementById('previewImage');
+        img.src = url;
+        img.onload = () => {
+            showState('image');
+            hideProgress();
+            resetBtn();
+            document.getElementById('genMeta').textContent = `Seed: ${lastSeed}`;
+        };
+        img.onerror = () => {
+            showState('empty');
+            hideProgress();
+            alert('Failed to load generated video');
+            resetBtn();
+        };
+    };
+}
+
+function addToHistory(url) {
+    history.unshift({ url, seed: lastSeed, time: new Date().toLocaleTimeString(), timestamp: Date.now() });
+    if (history.length > 20) history.pop();
+    // Persist to localStorage
+    localStorage.setItem('videoforge_history', JSON.stringify(history));
+    renderHistory();
+}
+
+function renderHistory() {
+    const strip = document.getElementById('historyStrip');
+    if (history.length === 0) {
+        strip.innerHTML = '<div class="text-xs text-gray-600 py-6 text-center w-full">Generated videos will appear here</div>';
+        return;
+    }
+    strip.innerHTML = history.map((h, i) => `
+        <div class="history-thumb flex-shrink-0 w-28 h-20 rounded-lg overflow-hidden border-2 border-transparent hover:border-primary relative group" onclick="showHistoryItem(${i})">
+            ${h.url.endsWith('.mp4') || h.url.includes('.mp4?') || h.url.endsWith('.webm') || h.url.includes('.webm?')
+                ? `<video src="${h.url}" class="w-full h-full object-cover" muted preload="metadata" playsinline></video>`
+                : `<img src="${h.url}" class="w-full h-full object-cover" alt="History ${i}"/>`}
+            <div class="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <span class="text-xs text-white">${h.seed}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+function showHistoryItem(index) {
+    const h = history[index];
+    if (h) {
+        lastVideoUrl = h.url;
+        const video = document.getElementById('previewVideo');
+        video.src = h.url;
+        showState('video');
+    }
+}
+
+// ============================================================
+// UI State Management
+// ============================================================
+function showState(state) {
+    document.getElementById('emptyState').classList.toggle('hidden', state !== 'empty');
+    document.getElementById('generatingState').classList.toggle('hidden', state !== 'generating');
+    document.getElementById('previewVideo').classList.toggle('hidden', state !== 'video');
+    document.getElementById('previewImage').classList.toggle('hidden', state !== 'image');
+    document.getElementById('videoActions').classList.toggle('hidden', state !== 'video' && state !== 'image');
+
+    const preview = document.getElementById('previewArea');
+    preview.classList.toggle('generating', state === 'generating');
+
+    if (state === 'video' || state === 'image') {
+        isGenerating = false;
+    }
+}
+
+function resetBtn() {
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = false;
+    btn.innerHTML = '<span class="material-icons-outlined">videocam</span> Generate Video';
+}
+
+function showProgress(label, pct) {
+    const el = document.getElementById('progressInfo');
+    el.classList.remove('hidden');
+    document.getElementById('progressLabel').textContent = label;
+    const rounded = Math.round(pct);
+    document.getElementById('progressPct').textContent = pct > 0 ? rounded + '%' : '';
+    document.getElementById('progressBar').style.width = rounded + '%';
+}
+
+function hideProgress() {
+    document.getElementById('progressInfo').classList.add('hidden');
+}
+
+// ============================================================
+// Actions
+// ============================================================
+function downloadVideo() {
+    if (!lastVideoUrl) return;
+    const a = document.createElement('a');
+    a.href = lastVideoUrl;
+    a.download = `videoforge_${lastSeed}.mp4`;
+    a.click();
+}
+
+function reuseSeed() {
+    if (lastSeed) {
+        document.getElementById('seedInput').value = lastSeed;
+    }
+}
+
+function extractLastFrame() {
+    const video = document.getElementById('previewVideo');
+    if (!video || !video.src) {
+        alert('No video to extract from');
+        return;
+    }
+
+    // Seek to near the end
+    video.currentTime = video.duration - 0.05;
+    video.onseeked = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // Convert to blob and upload as new reference
+        canvas.toBlob(async (blob) => {
+            const file = new File([blob], 'last_frame.png', { type: 'image/png' });
+            await handleImageUpload(file);
+            // Also show the frame
+            showState('image');
+            document.getElementById('previewImage').src = canvas.toDataURL('image/png');
+            document.getElementById('previewImage').classList.remove('hidden');
+            document.getElementById('previewVideo').classList.add('hidden');
+        }, 'image/png');
+    };
+}
+
+function clearHistory() {
+    history = [];
+    renderHistory();
+}
+
+// ============================================================
+// Cloudinary Upload
+// ============================================================
+// Cloudinary credentials (hardcoded)
+const CLOUDINARY_CLOUD_NAME = 'dol2t3l5x';  // Your actual cloud name
+const CLOUDINARY_API_KEY = '817871459259283';
+const CLOUDINARY_API_SECRET = 'kHrGwlpKfJN925Z6-eZiikNEuco';
+const CLOUDINARY_UPLOAD_PRESET = 'videoforge_preset';
+const CLOUDINARY_FOLDER = 'videoforge';
+
+async function uploadToCloudinary() {
+    if (!lastVideoUrl) {
+        alert('No video to upload');
+        return;
+    }
+    
+    alert('Downloading video for upload...');
+    
+    try {
+        // Fetch the video as blob
+        const resp = await fetch(lastVideoUrl);
+        const blob = await resp.blob();
+        
+        // Upload to Cloudinary
+        const formData = new FormData();
+        formData.append('file', blob, `videoforge_${lastSeed || Date.now()}.mp4`);
+        formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+        formData.append('folder', CLOUDINARY_FOLDER);
+        
+        alert('Uploading to Cloudinary...');
+        
+        const uploadResp = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/video/upload`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const result = await uploadResp.json();
+        
+        if (result.secure_url) {
+            alert(`Uploaded successfully!\n\nURL: ${result.secure_url}\n\nCopied to clipboard!`);
+            navigator.clipboard.writeText(result.secure_url);
+            // Save to history with cloudinary URL
+            const currentItem = history.find(h => h.url === lastVideoUrl);
+            if (currentItem) {
+                currentItem.cloudinary_url = result.secure_url;
+                localStorage.setItem('videoforge_history', JSON.stringify(history));
+            }
+        } else {
+            throw new Error(result.error?.message || 'Upload failed');
+        }
+    } catch(e) {
+        console.error('Cloudinary upload error:', e);
+        alert('Upload failed: ' + e.message);
+    }
+}
+</script>
+
+</body>
+</html>
+
+<!-- LTX-2 Prompt Guide Modal (hidden by default) -->
+<div id="ltxPromptGuide" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4">
+    <div class="bg-surface-2 rounded-xl max-w-3xl w-full max-h-[80vh] overflow-y-auto p-6">
+        <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-bold text-white">📝 LTX-2 Prompting Guide</h3>
+            <button onclick="document.getElementById('ltxPromptGuide').classList.add('hidden')" class="text-gray-400 hover:text-white">
+                <span class="material-icons-outlined">close</span>
+            </button>
+        </div>
+        
+        <div class="space-y-4 text-sm text-gray-300">
+            <div class="bg-surface-3 rounded-lg p-4">
+                <h4 class="font-semibold text-primary mb-2">🎬 Key Elements (Write 4-8 sentences)</h4>
+                <ul class="space-y-1 text-gray-400">
+                    <li>• <strong>Establish the shot</strong> - Use cinematography terms (close-up, wide shot, etc.)</li>
+                    <li>• <strong>Set the scene</strong> - Lighting, colors, textures, atmosphere</li>
+                    <li>• <strong>Describe the action</strong> - Natural sequence from start to end</li>
+                    <li>• <strong>Define characters</strong> - Age, hair, clothing, emotions through physical cues</li>
+                    <li>• <strong>Camera movement</strong> - Pan, track, dolly, zoom, handheld</li>
+                    <li>• <strong>Audio/dialogue</strong> - Use quotes for speech, describe ambient sounds</li>
+                </ul>
+            </div>
+            
+            <div class="bg-surface-3 rounded-lg p-4">
+                <h4 class="font-semibold text-primary mb-2">✨ What Works Best</h4>
+                <ul class="space-y-1 text-gray-400">
+                    <li>• Single flowing paragraph (present tense)</li>
+                    <li>• Cinematic compositions with thoughtful lighting</li>
+                    <li>• Emotive human moments, subtle gestures</li>
+                    <li>• Weather effects: fog, mist, golden hour, rain</li>
+                    <li>• Match detail to shot scale (closeups need more detail)</li>
+                </ul>
+            </div>
+            
+            <div class="bg-surface-3 rounded-lg p-4">
+                <h4 class="font-semibold text-primary mb-2">⚠️ What to Avoid</h4>
+                <ul class="space-y-1 text-gray-400">
+                    <li>• Multiple disconnected scenes</li>
+                    <li>• Overly complex camera movements</li>
+                    <li>• Too many characters interacting</li>
+                    <li>• Rapid scene changes</li>
+                    <li>• Vague descriptions without visual details</li>
+                </ul>
+            </div>
+            
+            <div class="bg-surface-3 rounded-lg p-4">
+                <h4 class="font-semibold text-primary mb-2">📋 Example Prompt</h4>
+                <p class="text-gray-400 italic">
+                    "INT. OVEN – DAY. Static camera from inside the oven, looking outward through the slightly fogged glass door. Warm golden light glows around freshly baked cookies. The baker's face fills the frame, eyes wide with focus, his breath fogging the glass as he leans in. Baker (whispering dramatically): 'Today… I achieve perfection.' He leans even closer, nose nearly touching the glass. 'Golden edges. Soft center. The gods themselves will smell these cookies and weep.' Steam drifts upward in slow motion."
+                </p>
+            </div>
+            
+            <div class="bg-surface-3 rounded-lg p-4">
+                <h4 class="font-semibold text-primary mb-2">🎥 Helpful Camera Terms</h4>
+                <p class="text-gray-400 text-xs">
+                    <strong>Movement:</strong> tracks, pans, circles, tilts, pushes in, pulls back, dolly, crane<br>
+                    <strong>Shots:</strong> close-up, medium shot, wide shot, establishing shot, over-the-shoulder<br>
+                    <strong>Style:</strong> handheld, static frame, shallow depth of field, film grain<br>
+                    <strong>Effects:</strong> slow motion, motion blur, fade-in, fade-out, time-lapse
+                </p>
+            </div>
+        </div>
+        
+        <div class="mt-4 flex justify-end">
+            <button onclick="document.getElementById('ltxPromptGuide').classList.add('hidden')" class="px-4 py-2 bg-primary hover:bg-primary-hover rounded-lg text-white text-sm">
+                Got it!
+            </button>
+        </div>
+    </div>
+</div>
