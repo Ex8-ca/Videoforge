@@ -2070,8 +2070,11 @@ async function pollForResult(promptId, maxWaitSeconds = 1800) {
                 throw new Error('Generation timed out');
             }
 
-            // Rough progress estimation (video gen is slow)
-            const pct = Math.min(90, Math.round((waited / 120) * 100));
+            // Progress estimation: cap at 95% while running (don't hit 100% until done — that's
+            // only set when we actually receive the output). With A14B MoE at 81 frames
+            // the total gen time is ~6 min on RTX 5080 16GB. Climb slowly to 95% over 8
+            // minutes so the bar keeps moving and the user knows it's still alive.
+            const pct = Math.min(95, Math.round((waited / 480) * 100) + 5);
             document.getElementById('genStatusText').textContent = `Generating... (${waited}s)`;
             showProgress(`Generating... (${waited}s)`, pct);
 
